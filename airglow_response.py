@@ -26,7 +26,9 @@ from scipy import signal
 
 from pdb import set_trace as bp
 
-sys.path.append('./Venus_Detectability/')
+fold ="./"
+# sys.path.append('./Venus_Detectability/')
+sys.path.append(fold)
 
 def get_inputs_for_airglow(amps, amps_u, dt, f_rho, f_c, f_VER_dayglow, f_VER, north_shifts, iNN, east_shifts, iEE, ns, es, normalize_w_amplitude_at_90=False, n_add=1000, use_theoretical=False, freq_target=1./25., do_density_scaling=False, data_file='./data/attenuation_kenda.csv'):
 
@@ -70,7 +72,7 @@ def get_inputs_for_airglow(amps, amps_u, dt, f_rho, f_c, f_VER_dayglow, f_VER, n
     
     return TIMES_DAYGLOW, ALTS_DAYGLOW, tau, c, amplification, Az, dzAz, dzrho, alpha, dVERdz, GF_f0, GF_f0_u, amp_at_90
 
-def load_atmosphere(folder_data='./Venus_Detectability/data/', use_kenda_data=False, gamma_kenda=11./9., rel_path_to_kenda='../../data/VER_profiles_from_kenda.csv'):
+def load_atmosphere(folder_data=fold + 'data/', use_kenda_data=False, gamma_kenda=11./9., rel_path_to_kenda=fold + 'data/VER_profiles_from_kenda.csv'):
 
     #folder_data = './Venus_Detectability/data/'
     file_atmos = f'{folder_data}profile_VCD_for_scaling_pd.csv'
@@ -642,7 +644,7 @@ def filter_wave(waveform, f1, f2, dt):
 
 def compute_airglow_scaler(freq_bins, store_id = 'GF_venus_Cold100_qssp', strike=45., dip=45., rake=45., ns=2500., es=2500., mw=6.5):
 
-    f_rho, f_t, f_gamma, f_c, f_VER, f_VER_dayglow = load_atmosphere(folder_data='./Venus_Detectability/data/')
+    f_rho, f_t, f_gamma, f_c, f_VER, f_VER_dayglow = load_atmosphere(folder_data=fold + 'data/')
 
     ## Construct seismic sources and stations
     epsilon = 5e3
@@ -734,36 +736,41 @@ def compute_airglow_scaler(freq_bins, store_id = 'GF_venus_Cold100_qssp', strike
 def plot_QSSP_traces(synthetic_traces, ns, es, north_shifts, iNN, east_shifts, iEE):
 
     idx = np.argmin(np.sqrt((north_shifts[iNN]/1e3-ns)**2+(east_shifts[iEE]/1e3-es)**2))
+    print(idx, synthetic_traces[idx])
 
-    fig = plt.figure(figsize=(8,4))
+    fig = plt.figure(figsize=(8,6))
     grid = fig.add_gridspec(3, 1)
 
     ax = fig.add_subplot(grid[:-1,0])
     ax_t = fig.add_subplot(grid[-1,0])
-    ax_t.set_xlabel('Time (s) since event')
-    ax_t.set_ylabel('Vertical velocity (m/s)')
+    ax_t.set_xlabel(r'Time since event / [$s$]')
+    ax_t.set_ylabel(r'Vertical velocity / [$m/s$]')
     for entry in [synthetic_traces[idx], ]:
         t = entry.get_xdata()
         fs = 1./(t[1]-t[0])
         x = entry.get_ydata()
 
         t_new = np.arange(0., t.max(), 1./fs)
-        x = interpolate.interp1d(t, x, bounds_error=False, fill_value=0.0)(t_new)
+        xi = interpolate.interp1d(t, x, bounds_error=False, fill_value=0.0)(t_new)
         t = t_new
         
         # Compute rFFT and frequencies
         X = np.fft.rfft(x)
         freqs = np.fft.rfftfreq(len(x), 1/fs)
-        magnitude = np.abs(X)
+        magnitude = np.abs(X)*np.sqrt(1/fs/x.size)
 
-        ax.plot(freqs, magnitude)
-        ax.set_xlabel('Frequency (Hz)')
-        ax.set_ylabel('Magnitude')
-        ax.grid(True)
-        ax.set_xscale('log')
-        ax.set_yscale('log')
-
-        ax_t.plot(t, x)
+        ax.plot(freqs, magnitude, c="k")
+    ax.set_xlabel(r'Frequency / [$Hz$])')
+    ax.set_ylabel(r'Amplitude spectrum / [$m/s/\sqrt{Hz}]$')
+    ax.grid(True)
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlim(freqs.min(), freqs.max())
+    ax.set_ylim(magnitude.max()/1e9, magnitude.max()*10)
+    ax_t.plot(t_new, xi, c="k")
+    ax_t.set_xlim(t_new.min(), t_new.max())
+    fig.align_labels()
+    fig.tight_layout()
 
     return fig
 
@@ -828,7 +835,7 @@ def plot_airglow_traces(amp_dayglow, amp_nightglow, GF_f0, GF_f0_u, amp_at_90, f
 if __name__ == '__main__':
 
     ## Load atmosphere
-    f_rho, f_t, f_gamma, f_c, f_VER, f_VER_dayglow = load_atmosphere(folder_data='./Venus_Detectability/data/')
+    f_rho, f_t, f_gamma, f_c, f_VER, f_VER_dayglow = load_atmosphere(folder_data=fold+'data/')
 
     ## Construct seismic sources and stations
     epsilon = 5e3
