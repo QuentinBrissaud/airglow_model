@@ -202,7 +202,7 @@ class Seismograms:
 
     def plot_traces(self, ns, es):
 
-        idx = np.argmin(np.sqrt((self.north_shifts[self.iNN]/1e3-ns/1e3)**2+(self.east_shifts[self.iEE]/1e3-es/1e3)**2)) 
+        idx = np.argmin(np.sqrt((self.north_shifts_valid/1e3-ns/1e3)**2+(self.east_shifts_valid/1e3-es/1e3)**2)) 
         # print(idx)
         
         fig = plt.figure(figsize=(8,6))
