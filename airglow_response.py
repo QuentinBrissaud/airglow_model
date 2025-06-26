@@ -323,17 +323,16 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b,a, t
         ### VERSION OF PL 
         dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
         ### VERSION OF BK 
-        #dver_vz_z = fver_alt * np.gradient(vz_z, self.z_1_27_calc_m, axis=0)
+        #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
 
         dver_z = lfilter(b, a, dver_vz_z, axis=1)
     else:
         ### Compute VER and its vertical gradient (numpy gradient) FOURIER DOMAIN 
         ver_vz = fver_alt * fft_vz_z  # shape: (Nz, Nt)        
-        print("here")
         ### VERSION OF PL 
         dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
         ### VERSION OF BK 
-        # dver_vz_z = fver_alt * np.gradient(vz_z, self.z_1_27_calc_m, axis=0)
+        #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
 
         dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=0).real
 
@@ -393,7 +392,7 @@ def worker_func(i):
 class AirglowSignal:
 # =========================================================================================================
 
-    def __init__(self, SEISMO, Nz = 10 ):
+    def __init__(self, SEISMO, Nz = 40 ):
         """
         Initialize the AirglowSignal model.
 
@@ -550,7 +549,7 @@ class AirglowSignal:
 
 
     def calculate_1_27_airglow(self, list_ieast, list_inorth, loc_save=None, time_save = None, fourier_filtering=False, 
-                               n_cpus=10, do_parallel=False, tmax=2500):
+                               n_cpus=10, do_parallel=True, tmax=2500):
         ### Ensure we have a time series: 
         if self.t_new is None: 
             t = self.synthetic_traces_v[0].get_xdata()
@@ -665,7 +664,6 @@ class AirglowSignal:
         np.save("./results/I_t", save_intensity_dver)
 
 
-    
     def plot_nightglow_traces(self, i_east, i_north, z1=92, z2=112, photons_nightglow=2e4):
     
         ### Find the right altitude
@@ -686,7 +684,7 @@ class AirglowSignal:
         ####################################################################################
         fig, (axt,axm, axb, axbb) = plt.subplots(4,1,figsize=(6,6) )
         axt.plot(self.t_new, self.VEL[i_east, i_north,:], c="k", lw=1) 
-        axt.set_title("Ground signal")
+        axt.set_title("Ground signal at {:.0f} km E, {:.0f} km N".format(self.EE[i_east,i_north]/1e3,self.NN[i_east,i_north]/1e3))
         axt.set_ylabel("Velocity / [$m/s$]")
         ###
         axm.plot(self.t_new, vz_z1, c="navy", lw=1, label="z={:.1f} km".format(alts_airglow[iz1]))
