@@ -541,7 +541,7 @@ class AirglowSignal:
     def _def_filter_nightglow(self):
         ### Transfer function for OPTION 2: scipy-defined filtering 
         #tau = 4460  # seconds
-        num = [self.tau]
+        num = [-self.tau]
         den = [self.tau, 1]
         system_d = cont2discrete((num, den), self.dt, method='bilinear')
         b, a = system_d[0].flatten(), system_d[1].flatten()
@@ -1122,7 +1122,7 @@ def get_dVER_nightglow(TIMES_DAYGLOW, ALTS_DAYGLOW, tau, c, Az, dzAz, f0, df0dt,
         #dt  = 0.01      # s,  set from your data
         #tau = 2.0       # s,  choose
         a   = np.exp(-dt/tau)      # pole
-        b   = tau * (1.0 - a)              # zero
+        b   = -tau * (1.0 - a)              # zero
         
         for i in range(TIMES_DAYGLOW.shape[1]):
             #y = np.convolve(signal[:,i], h, mode='full')
