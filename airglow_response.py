@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import sys
 ###
-from scipy import interpolate
+from scipy import interpolate, integrate
 from scipy import signal
 from scipy.signal import fftconvolve, lfilter, cont2discrete
 from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
@@ -17,11 +17,13 @@ from functools import partial
 from multiprocessing import get_context
 ###
 from tqdm import tqdm
+import time as ptime      
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 ###
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, SymLogNorm
 from matplotlib.animation import FuncAnimation
+import matplotlib.gridspec as gridspec
 ###
 import cmcrameri.cm as cmc
 from pdb import set_trace as bp
@@ -36,11 +38,10 @@ fold ="./"
 class Seismograms:
 # =========================================================================================================
 
-    def __init__(self, mw=6.5, strike=0., dip=45., rake=45., min_dist=500e3,
-                        store_id= 'GF_venus_Cold100_qssp', depth = None,
+    def __init__(self, mw=6.5, strike=0., dip=45., rake=45., depth = None, stf_type=None, effective_duration=25., 
+                        store_ids_dists=[('GF_venus_Cold100_qssp',50e3,8000e3)], 
                         north_shifts = None, east_shifts= None, gridded = True, 
-                        base_folder='/projects/restricted/infrasound/data/infrasound/2023_Venus_inversion/', 
-                        stf_type=None, effective_duration=25.):
+                        base_folder='/projects/restricted/infrasound/data/infrasound/2023_Venus_inversion/'):
         
         """
         Initialize the Seismogram class.
@@ -55,8 +56,8 @@ class Seismograms:
         ### Remove sections that QSSP cannot calculate 
         self.north_shifts = north_shifts
         self.east_shifts = east_shifts
-        self.north_shifts_valid = north_shifts[np.where(abs(north_shifts)>=min_dist)]
-        self.east_shifts_valid = east_shifts[np.where(abs(north_shifts)>=min_dist)] 
+        #self.north_shifts_valid = north_shifts[np.where(np.sqrt(north_shifts**2+east_shifts**2)>=min_dist)]
+        #self.east_shifts_valid = east_shifts[np.where(np.sqrt(north_shifts**2+east_shifts**2)>=min_dist)] 
         self.delta_dist = 10e3
         self.gridded=gridded
         ### NOTE: Add option to not calculate a grid ! 
@@ -64,36 +65,59 @@ class Seismograms:
         if self.gridded:
             self.Nn = north_shifts.size 
             self.Ne = east_shifts.size 
-            self.EE, self.NN = np.meshgrid(east_shifts, north_shifts)
+            self.EE, self.NN = np.meshgrid(east_shifts, north_shifts)       ### Complete grid 
+            iEE, iNN = np.meshgrid(range(north_shifts.size), range(east_shifts.size))   ### Indices of grid 
+            self.iEE, self.iNN = iEE.ravel(), iNN.ravel()
         else: 
             self.Nn = north_shifts.size  
             self.Ne = 1 
             self.EE, self.NN = north_shifts, east_shifts
-        #if gridded: 
+            iEE, iNN = np.meshgrid(range(north_shifts.size), range(east_shifts.size))   ### Indices of grid 
+            self.iEE, self.iNN = iEE.ravel(), iNN.ravel()
 
-        self.synthetic_traces_v, self.synthetic_traces_u, self.targets_v, targets_u, iNN, self.iEE, shape_init = \
-                            self._build_seismic_synthetics(mw, strike, dip, rake,
-                                                          stf_type, effective_duration, depth, 
-                                                          self.north_shifts_valid, self.east_shifts_valid,
-                                                          store_id, base_folder, self.gridded)
+
+
+        ### Build waveform from Green's functions, using several stores if needed. 
+        self.synthetic_traces_v, self.synthetic_traces_u, self.targets_v, self.targets_u = [], [], [], []
+        self.lNN, self.lEE = [],[]
+        for (store_id, min_dist, max_dist) in store_ids_dists:
+            synthetic_traces_v, synthetic_traces_u, targets_v, targets_u, lNN, lEE = \
+                                self._build_seismic_synthetics(mw, strike, dip, rake,
+                                                            stf_type, effective_duration, depth, 
+                                                            self.north_shifts, self.east_shifts,
+                                                            store_id, min_dist, max_dist, 
+                                                            base_folder, self.gridded)
+        
+            self.synthetic_traces_u += synthetic_traces_u
+            self.synthetic_traces_v += synthetic_traces_v
+            self.targets_u += targets_u
+            self.targets_v += targets_v
+            self.lEE = np.concatenate((self.lEE, lEE))
+            self.lNN = np.concatenate((self.lNN, lNN))
+
         ### Useful variables
         self.dt = np.diff(self.synthetic_traces_u[0].get_xdata())[0]
 
 
     def _build_seismic_synthetics(self, mw, strike, dip, rake, stf_type, effective_duration, depth, 
-                                 north_shifts, east_shifts, store_id, base_folder, gridded):
+                                 north_shifts, east_shifts, store_id, min_dist, max_dist, base_folder, gridded):
 
         
 
         ### Make a pseudo-grid of North/East 
         if gridded:
-            iNN, iEE = np.meshgrid(range(north_shifts.size), range(east_shifts.size))
-            shape_init = iNN.shape
-            iNN, iEE = iNN.ravel(), iEE.ravel()
+            # iNN, iEE = np.meshgrid(range(north_shifts.size), range(east_shifts.size))
+            # shape_init = iNN.shape
+            # iNN, iEE = iNN.ravel(), iEE.ravel()
+            lNN, lEE = np.meshgrid(north_shifts, east_shifts)
+            lNNo, lEEo = lNN.ravel(), lEE.ravel()
+            lNN = lNNo[(np.sqrt(lNNo**2+lEEo**2)>=min_dist) & (np.sqrt(lNNo**2+lEEo**2)<max_dist)]
+            lEE = lEEo[(np.sqrt(lNNo**2+lEEo**2)>=min_dist) & (np.sqrt(lNNo**2+lEEo**2)<max_dist)]
         else: 
-            iNN, iEE = np.arange(north_shifts.size), np.arange(east_shifts.size)
-            shape_init = iNN.shape
-            iNN, iEE = iNN.ravel(), iEE.ravel()
+            # iNN, iEE = np.arange(north_shifts.size), np.arange(east_shifts.size)
+            # shape_init = iNN.shape
+            # iNN, iEE = iNN.ravel(), iEE.ravel()
+            lNN, lEE = north_shifts, east_shifts
 
         ### Source Time function properties 
         stf = dict()
@@ -122,7 +146,8 @@ class Seismograms:
                 store_id=store_id,
                 interpolation='multilinear',
                 codes=('NET', 'STA', 'LOC', 'Z'))
-            for north_shift, east_shift in zip(north_shifts[iNN], east_shifts[iEE])
+            # for north_shift, east_shift in zip(north_shifts[iNN], east_shifts[iEE])
+            for north_shift, east_shift in zip(lNN, lEE)
             ]
 
         waveform_targets_u = [
@@ -135,7 +160,8 @@ class Seismograms:
                 store_id=store_id,
                 interpolation='multilinear',
                 codes=('NET', 'STA', 'LOC', 'Z'))
-            for north_shift, east_shift in zip(north_shifts[iNN], east_shifts[iEE])
+            # for north_shift, east_shift in zip(north_shifts[iNN], east_shifts[iEE])
+            for north_shift, east_shift in zip(lNN, lEE)
             ]
 
         engine = gf.LocalEngine(store_dirs=[f'{base_folder}{store_id}/'])
@@ -145,7 +171,7 @@ class Seismograms:
         response = engine.process(mt_source, waveform_targets_u)
         synthetic_traces_u = response.pyrocko_traces()
 
-        return synthetic_traces, synthetic_traces_u, waveform_targets, waveform_targets_u, iNN, iEE, shape_init
+        return synthetic_traces, synthetic_traces_u, waveform_targets, waveform_targets_u, lNN, lEE
     
 
     def arrange_interpolate_synthetics(self, tmax=2500):
@@ -154,16 +180,6 @@ class Seismograms:
         t = self.synthetic_traces_v[0].get_xdata()
         self.t_new = np.arange(0., max(t.max(), tmax), self.dt)
         self.Nt = self.t_new.size
-
-        ### Remake the pseudo grid 
-        if self.gridded:
-            iNN, iEE = np.meshgrid(range(self.north_shifts.size), range(self.east_shifts.size))
-            shape_init = iNN.shape
-            self.iNN, self.iEE = iNN.ravel(), iEE.ravel()
-        else: 
-            iNN, iEE = np.arange(self.north_shifts.size), np.arange(self.east_shifts.size)
-            shape_init = iNN.shape
-            self.iNN, self.iEE = iNN.ravel(), iEE.ravel()
 
         ### Where to store interpolated seismograms (grid)
         self.VEL = np.zeros((self.Ne, self.Nn, self.Nt), dtype=np.float64)
@@ -205,7 +221,7 @@ class Seismograms:
 
     def plot_traces(self, ns, es):
 
-        idx = np.argmin(np.sqrt((self.north_shifts_valid/1e3-ns/1e3)**2+(self.east_shifts_valid/1e3-es/1e3)**2)) 
+        idx = np.argmin(np.sqrt((self.lNN-ns)**2+(self.lEE-es)**2)) 
         # print(idx)
         
         fig = plt.figure(figsize=(8,6))
@@ -238,6 +254,7 @@ class Seismograms:
         ax.set_yscale('log')
         ax.set_xlim(freqs[1], freqs.max())
         ax.set_ylim(magnitude[-1]/100, magnitude.max()*10)
+        ax.set_title("Spectrum and waveform at {:.1f} km North, {:.1f} km East".format(self.targets_v[idx].north_shift/1e3, self.targets_v[idx].east_shift/1e3))
         ###
         ax_t.set_xlim(t_new.min(), t_new.max())
         ax_t.set_xlabel(r'Time since event / [$s$]')
@@ -247,6 +264,54 @@ class Seismograms:
         fig.tight_layout()
 
         return fig
+    
+
+    def plot_wavefront(self, time_save=None):
+
+        if time_save ==None: 
+            time_save = self.t_new[::int(np.ceil(self.Nt//9))]
+            itime_save = range(0,self.Nt,int(np.ceil(self.Nt//9)))
+            
+        Nrow = int(np.ceil(len(time_save[1:])/3))
+        Ncol = 5
+        fig, axes = plt.subplots(ncols=Ncol, nrows=Nrow, 
+                                 gridspec_kw= dict(width_ratios=[1,1,1,0.05,0.05]), 
+                                 figsize=(8,int(10*(Nrow/Ncol))) )
+        
+        ### Wavefront (vertical velocity)
+        wf = self.VEL
+        vmin = np.mean(wf)-1*np.std(wf)
+        vmax = np.mean(wf)+1*np.std(wf)
+        
+        for ii, (it, tw)  in enumerate(zip(itime_save[1:],time_save[1:])):
+
+            ###
+            u = ii%3
+            v = ii//3
+            im = axes[v][u].pcolormesh(self.EE/1e3, self.NN/1e3, wf[:,:,it], cmap="Greys_r",vmin=vmin, vmax=vmax)
+            ###
+            if u==2:
+                cbar = fig.colorbar(im, cax = axes[v][4], label=r"$V_z$ / [$m/s$] ", fraction=0.3, pad=-60.)
+                cbar.formatter.set_useMathText(True)
+                axes[v][3].axis("off")
+            if u ==0 and v==1:
+                axes[v][u].set_ylabel(r"North distance / [$km$]")
+            if v==Nrow-1 and u==1:
+                axes[v][u].set_xlabel(r"East distance / [$km$]")
+            axes[v][u].set_aspect('equal', adjustable="box")
+            axes[v][u].text(0.02, 0.98, "{:.0f} s".format(tw),
+                            transform=axes[v][u].transAxes,
+                            fontsize=8,
+                            verticalalignment='top',
+                            horizontalalignment='left',
+                            bbox=dict(facecolor='white', edgecolor='none', alpha=0.8, boxstyle='square,pad=0.3'))
+
+            axes[u][v].tick_params(axis='both', which='major', labelsize=8)
+
+        #fig.suptitle("Vertical velocity")
+        axes[0][1].set_title("Vertical velocity", pad=20)
+        fig.subplots_adjust(wspace=-0, hspace=0.3, right=0.85, left =0.05, top=0.93)
+        return(fig)
 
 
 # =========================================================================================================
@@ -311,7 +376,7 @@ def propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_
 
 # =========================================================================================================
 ### Function to transform velocity at a specific altitude into VER perturbation 
-def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b,a, tf_phase_nightglow=None, fourier_filtering=False):
+def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b,a, tf_phase_nightglow=None, fourier_filtering=False, test=False):
 
     z_1_27_calc_km = z_1_27_calc_m/1e3
     fver_alt = f_VER_1_27(z_1_27_calc_km)[:,np.newaxis]
@@ -324,8 +389,125 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b,a, t
         dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
         ### VERSION OF BK 
         #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
+        ver_dvz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
 
         dver_z = lfilter(b, a, dver_vz_z, axis=1)
+        dver_z2 = lfilter(b, a, ver_dvz_z, axis=1)
+
+        if test:
+            gs_kw = dict(width_ratios=[1,0.5])
+            figb, (ax3b,ax3c) = plt.subplots(ncols=2, nrows=1, constrained_layout=True, gridspec_kw=gs_kw)
+
+            fig = plt.figure(figsize=(10, 10))
+            # Create GridSpec with 2 rows and 3 columns
+            gs = gridspec.GridSpec(4, 3, height_ratios=[2,4, 4, 4], hspace=0.4, wspace=0.3)
+            # Top 3 small plots
+            ax1 = fig.add_subplot(gs[0, 0])
+            ax2 = fig.add_subplot(gs[0, 1])
+            ax3 = fig.add_subplot(gs[0, 2])
+            # Bottom 2 long plots spanning the width of the top 3
+            ax4 = fig.add_subplot(gs[1, :])
+            ax5 = fig.add_subplot(gs[2, :])
+            ax6 = fig.add_subplot(gs[3, :])
+            
+
+            ax1.plot(np.max(np.abs(np.gradient(vz_z, z_1_27_calc_m, axis=0)), axis=1), z_1_27_calc_km, c="k")
+            ax1.set_title("Max div of Vz")
+            ax2.plot(fver_alt, z_1_27_calc_km, c="k")
+            ax2b = ax2.twiny()
+            ax2b.plot(np.gradient(fver_alt, z_1_27_calc_m, axis=0), z_1_27_calc_km, ls="--", color="grey")
+            ax2.set_title("VER")
+            ### Plot dVER/VER and dvz/vz 
+            ax3.plot(np.max(np.gradient(fver_alt, z_1_27_calc_m, axis=0)/fver_alt, axis=1), z_1_27_calc_km, c="k", label="div(VER)/VER")
+            ax3.plot(np.max(np.gradient(vz_z, z_1_27_calc_m, axis=0)/vz_z, axis=1), z_1_27_calc_km, c="k", ls="--", label="div(v)/v")
+            print(np.median(  np.abs((np.gradient(vz_z, z_1_27_calc_m, axis=0)/vz_z) / (np.gradient(fver_alt, z_1_27_calc_m, axis=0)/fver_alt)), axis=1) )
+            ax3.set_title("Max div of Vz*VER")
+            ax3.legend()
+
+
+            grada = np.gradient(vz_z, z_1_27_calc_m, axis=0)/vz_z 
+            gradb = np.gradient(fver_alt, z_1_27_calc_m, axis=0)/fver_alt
+            ratio  = abs(grada/gradb)
+            for i in range(0,vz_z.shape[1],10):
+                ax3b.plot(ratio[:,i],z_1_27_calc_km, c="tab:blue", alpha=0.1, lw=0.1)
+            ax3b.set_xscale("log")
+            ax3b.set_xlim(0.1,1e3)
+            ax3b.axvline(10, ls="--", c="grey", label="(dVz/vz) >> (dVER/VER)")
+            ax3b.legend(loc=1)
+            ax3b.plot(np.median(ratio, axis=1), z_1_27_calc_km, c="k")
+            ax3b.set_ylabel("Altitude / [$km$]")
+            ax3b.set_xlabel("(dVz/vz)/(dVER/VER) over time")
+            ax3c.plot(fver_alt, z_1_27_calc_km, c="k")
+            ax3cb = ax3c.twiny()
+            ax3cb.plot(np.gradient(fver_alt, z_1_27_calc_m, axis=0), z_1_27_calc_km, ls="--", color="grey")
+            ax3c.set_xlabel("VER")
+            ax3cb.set_xlabel("div(VER)")
+            ax3c.set_xlim(-2.5e11,5e11)
+            ax3cb.set_xlim(-0.6e8,1.2e8)
+
+            ### 
+            i=39
+            dz_km = np.diff(z_1_27_calc_km)[0]
+            amp_airglow = integrate.cumulative_trapezoid(dver_z, x=z_1_27_calc_m, axis=0)
+            amp_airglow2 = integrate.cumulative_trapezoid(dver_z2, x=z_1_27_calc_m, axis=0)
+
+            # np.save("./results/Resolution_integral_interp2", amp_airglow2[-1,:])
+            # np.save("./results/Resolution_integral_interp", amp_airglow[-1,:])
+
+            np.save("./results/Resolution_integral_gauss2", amp_airglow2[-1,:])
+            np.save("./results/Resolution_integral_gauss", amp_airglow[-1,:])
+
+            ampgauss = np.load("./results/Resolution_integral_gauss.npy")
+            ampgauss2 = np.load("./results/Resolution_integral_gauss2.npy")
+            ampinterp = np.load("./results/Resolution_integral_interp.npy")
+            ampinterp2 = np.load("./results/Resolution_integral_interp2.npy")
+
+            fig, ax = plt.subplots()
+            ax.plot(ampgauss, c="k", ls="-", label="div(VER*vz), gaussian fit")
+            ax.plot(ampinterp, c="k", ls="--", label="div(VER*vz), interpolated VER")
+            ax.plot(ampgauss2, c="purple", ls="-", label="VER*div(vz), gaussian fit")
+            ax.plot(ampinterp2, c="purple", ls="--", label="VER*div(vz), interpolated VER")
+            ax.legend()
+            ax.set_xlabel("Time iteration")
+            ax.set_ylabel("Integrated Intensity")
+
+            Nz = int(4*dver_vz_z.shape[0]/40)
+            for i in range(0,dver_vz_z.shape[0],Nz):
+                ax4.plot(dver_vz_z[i,:]/np.max(dver_vz_z[i,:])*dz_km*Nz/2 + z_1_27_calc_km[i], c="k")#, label="div(VER*v) at altitude 10")
+                ax4.plot(ver_dvz_z[i,:]/np.max(dver_vz_z[i,:])*dz_km*Nz/2 + z_1_27_calc_km[i], c="r", ls="--")#,  label="VER*div(v) at altitude 10")
+                ### 
+                ax5.plot(dver_z[i,:]/np.max(dver_z[i,:])*dz_km*Nz/2 + z_1_27_calc_km[i], c="k")#, label="Filtered div(VER*v) at altitude 10")
+                ax5.plot(dver_z2[i,:]/np.max(dver_z[i,:])*dz_km*Nz/2 + z_1_27_calc_km[i], c="r", ls="--")#,  label="Filtered VER*div(v) at altitude 10")
+                ### Progressive integral 
+                ax6.plot(amp_airglow[i,:]/np.max(amp_airglow[i,:])*dz_km*Nz/2 + z_1_27_calc_km[i], c="k")#, label="Filtered div(VER*v) at altitude 10")
+                ax6.plot(amp_airglow2[i,:]/np.max(amp_airglow[i,:])*dz_km*Nz/2 + z_1_27_calc_km[i], c="r", ls="--")#,  label="Filtered VER*div(v) at altitude 10")    
+            
+            ax6.plot(amp_airglow[-1,:]/np.max(amp_airglow[-1,:])*dz_km*Nz/2 + z_1_27_calc_km[-1], c="k")#, label="Filtered div(VER*v) at altitude 10")
+            ax6.plot(amp_airglow2[-1,:]/np.max(amp_airglow[-1,:])*dz_km*Nz/2 + z_1_27_calc_km[-1], c="r", ls="--")#,  label="Filtered VER*div(v) at altitude 10")    
+            ###
+            ax4.legend()
+            ax5.legend()
+            ax1.set_ylabel("Altitude / km")
+
+            fig2 = plt.figure(figsize=(10, 5))
+            # Create GridSpec with 2 rows and 3 columns
+            gs2 = gridspec.GridSpec(1, 3)
+            # Top 3 small plots
+            ax0 = fig2.add_subplot(gs2[0, 0])
+            ax1 = fig2.add_subplot(gs2[0, 1])
+            ax2 = fig2.add_subplot(gs2[0, 2])
+            it = 2400
+            print(dver_vz_z[:,it].min(),dver_vz_z[:,it].max() )
+            ###
+            ax0.pcolormesh(np.array([0,1]),z_1_27_calc_km, np.tile(vz_z[:,it],(2,1)).T, cmap="seismic", vmin=-vz_z[:,it].max(), vmax=vz_z[:,it].max())
+            ax0.set_title("vz")
+            ###
+            ax1.pcolormesh(np.array([0,1]),z_1_27_calc_km, np.tile(dver_vz_z[:,it],(2,1)).T, cmap="seismic", vmin=-1e6, vmax=1e6)
+            ax1.set_title("div(VER*vz)")
+            ###
+            ax2.pcolormesh(np.array([0,1]),z_1_27_calc_km, np.tile(ver_dvz_z[:,it],(2,1)).T, cmap="seismic", vmin=-1e6, vmax=1e6)
+            ax2.set_title("VER*div(vz)")
+            print(brou)
     else:
         ### Compute VER and its vertical gradient (numpy gradient) FOURIER DOMAIN 
         ver_vz = fver_alt * fft_vz_z  # shape: (Nz, Nt)        
@@ -362,6 +544,9 @@ def airglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
 
     vz_z, fft_vz_z = propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_shift_z)
+    # if i_en == 120:
+    #     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b, a, fourier_filtering= fourier_filtering, test=True)
+    # else:
     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b, a, fourier_filtering= fourier_filtering)
     amp_airglow = integrate_line_of_sight(dver_z, z_1_27_calc_m)
             
@@ -443,6 +628,32 @@ class AirglowSignal:
         VER = pd.read_csv(file_1_27_airglow)
         VER.columns=['VER', 'alt']
         self.f_VER_1_27 = interpolate.interp1d(VER.alt, VER.VER, kind='quadratic', bounds_error=False, fill_value=0.)
+        ### Other attempt: with curve_fit by two gaussians 
+        def double_positive_gaussian(x, a1, mu1, sigma1, a2, mu2, sigma2):
+            return (np.abs(a1) * np.exp(-((x - mu1) ** 2) / (2 * sigma1 ** 2)) +\
+                    np.abs(a2) * np.exp(-((x - mu2) ** 2) / (2 * sigma2 ** 2)))
+        
+        def asymmetric_gaussian_pulse(x, a, mu, sigma_left, sigma_right):
+            sigma = np.where(x < mu, sigma_left, sigma_right)
+            return np.abs(a) * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+
+        from scipy.optimize import curve_fit
+        initial_guess1 = [5e11, 100, 10, 1e10, 110, 10]
+        popt1, pcov1 = curve_fit(double_positive_gaussian, VER.alt, VER.VER, p0=initial_guess1)
+        initial_guess2 = [5e11, 100, 10, 11]
+        popt2, pcov2 = curve_fit(asymmetric_gaussian_pulse, VER.alt, VER.VER, p0=initial_guess2)
+
+        ### TEST
+        self.f_VER_1_27 = lambda x: asymmetric_gaussian_pulse(x, *popt2)
+        # self.f_VER_1_27 = lambda x: double_positive_gaussian(x, *popt1)
+        # fig, ax = plt.subplots() 
+        # z = np.linspace(70,150,100)
+        # ax.plot(z, self.f_VER_1_27(z), c="grey")
+        # ax.plot(z, double_positive_gaussian(z, *popt1) , c="r")
+        # ax.plot(z, asymmetric_gaussian_pulse(z, *popt2) , c="g")
+        # ax.plot(VER.alt, VER.VER, ls="", marker="d", c="k")
+        # ax.set_xlabel("Altitude / [$km$]")
+
         self.z_1_27_min = VER.alt.min()
         self.z_1_27_max = VER.alt.max()
 
@@ -548,19 +759,34 @@ class AirglowSignal:
         return(b,a)
 
 
-    def calculate_1_27_airglow(self, list_ieast, list_inorth, loc_save=None, time_save = None, fourier_filtering=False, 
+    def calculate_1_27_airglow(self, list_ieast, list_inorth, loc_save_idx=None, loc_save_EN = None, 
+                               time_save = None, fourier_filtering=False, 
                                n_cpus=10, do_parallel=True, tmax=2500):
+        
         ### Ensure we have a time series: 
         if self.t_new is None: 
             t = self.synthetic_traces_v[0].get_xdata()
             self.t_new = np.arange(0., max(t.max(), tmax), self.dt)
             self.Nt = self.t_new.size
+
         ### Save vertical profiles at 10 first locations by default
-        if loc_save is None:
-            loc_save = list(zip(list_ieast, list_inorth))[:10]
+        if loc_save_idx is None and loc_save_EN is None:
+            loc_save_idx = list(zip(list_ieast[:10], list_inorth[:10]))
+        elif loc_save_EN is not None:
+            loc_save_idx = []
+            for es, ns in loc_save_EN:
+                idx = np.argmin(np.sqrt((self.NN-ns)**2+(self.EE-es)**2)) 
+                idx = np.unravel_index(idx, self.EE.shape)
+                loc_save_idx.append(idx)
+        elif loc_save_idx is not None:
+            loc_save_EN = []
+            for ies, ins in loc_save_idx:
+                loc_save_EN.append((self.EE[ies,ins], self.NN[ies, ins] ))
+
         ### Save wavefield every 10 timesteps by default
         if time_save is None: 
             time_save = self.t_new[::int(self.Nt//10)]
+
         itime_save = [np.where(abs(self.t_new-tw)<self.dt/2)[0][0] for tw in time_save]
         save_wavefield = np.zeros((self.Ne, self.Nn, self.Nz, len(time_save),2 ))
         save_intensity_dver = np.zeros((self.Ne, self.Nn,len(time_save)))
@@ -616,7 +842,7 @@ class AirglowSignal:
                 vz_z_it, dver_z_it, amp_airglow_it = airglow_at_location(i_en, list_of_locations, fft_vzs, self.att_exp, self.amplification, 
                                                                           self.phase_shift_z,self.f_VER_1_27,
                                                                         self.z_1_27_calc_m, fourier_filtering, self.b, self.a, 
-                                                                        loc_save, itime_save, self.gridded)
+                                                                        loc_save_idx, itime_save, self.gridded)
                 if self.gridded:
                     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
                     save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
@@ -627,24 +853,22 @@ class AirglowSignal:
             # print(t2-t1)
         ### PARALLEL WITH MULTIPROCESSING (requires all functions defined outside of class)
         else:
-            # import time as ptime 
-            # t0=ptime.time()
+            t0=ptime.time()
             ### NOTE: "fork" is much faster than "spawn" as spawn spends time copying array to different workers 
             ### However, fork doesn't work on windows/mac. To get a more flexible but fast parallelisation, 
             ### we need to move to joblib and memory maps. 
+            print(loc_save_idx)
             with get_context("fork").Pool(processes=n_cpus,
                                             initializer=init_worker,
                                             initargs=(list_of_locations, fft_vzs, self.att_exp, self.amplification, self.phase_shift_z,
                                                     self.f_VER_1_27, self.z_1_27_calc_m, fourier_filtering,
                                                     self.b, self.a, 
-                                                    loc_save, itime_save, self.gridded)
+                                                    loc_save_idx, itime_save, self.gridded)
                                                 ) as p:
-                # t1 = ptime.time()
-                results = p.map(worker_func, list_indices)
-                
-                # t2 = ptime.time()
-            # print(t1-t0)
-            # print(t2-t1)
+                #results = p.map(worker_func, list_indices)
+                results = list(tqdm(p.imap(worker_func, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
+                t2 = ptime.time()
+            print("Time for airglow calculation: {:.1f} s".format(t2-t0))
 
             ### Store wavefields 
             if self.gridded: 
@@ -664,7 +888,16 @@ class AirglowSignal:
         np.save("./results/I_t", save_intensity_dver)
 
 
-    def plot_nightglow_traces(self, i_east, i_north, z1=92, z2=112, photons_nightglow=2e4):
+    def plot_nightglow_traces(self, loc_plot = None, idx_plot = None, z1=92, z2=112, photons_nightglow=2e4):
+
+        ### Convert east and north coordinate to indices if needed 
+        if loc_plot is None and idx_plot is None:
+            raise("Requires a couple of coordinates (loc_plot) or a couple of indices (idx_plot).")
+        elif loc_plot is not None:
+            idx = np.argmin(np.sqrt((self.NN-loc_plot[1])**2+(self.EE-loc_plot[0])**2)) 
+            i_east, i_north = np.unravel_index(idx, self.EE.shape)
+        else:
+            i_east, i_north = idx_plot[0], idx_plot[1]
     
         ### Find the right altitude
         alts_airglow = self.z_1_27_calc_km
@@ -713,38 +946,55 @@ class AirglowSignal:
         fig.tight_layout()
         
 
-    def plot_nightglow_images(self, time_save=None):
-        if time_save ==None: 
-            time_save = self.t_new[::int(self.Nt//10)]
-            
+    def plot_nightglow_images(self, time_save=None):       
+
+        ### Wavefront (integrated intensity)
         #wf = np.load("./results/dver_t.npy")
         wf = np.load("./results/I_t.npy")
+        vmin = np.mean(wf)-0.5*np.std(wf)
+        vmax = np.mean(wf)+0.5*np.std(wf)
 
-        
+        if time_save ==None: 
+            time_save = self.t_new[::int(np.ceil(self.Nt//9))]
+            itime_save = range(0,self.Nt,int(np.ceil(self.Nt//9)))
+            
         Nrow = int(np.ceil(len(time_save[1:])/3))
-        Ncol = 4
+        Ncol = 5
         fig, axes = plt.subplots(ncols=Ncol, nrows=Nrow, 
-                                 gridspec_kw= dict(width_ratios=[1,1,1,0.05]), 
-                                 figsize=(6,int(6*(Nrow/Ncol))) )
+                                 gridspec_kw= dict(width_ratios=[1,1,1,0.05,0.05]), 
+                                 figsize=(8,int(10*(Nrow/Ncol))) )
         
-        for it, tw  in enumerate(time_save[1:]):
+
+        for ii, (it, tw)  in enumerate(zip(itime_save[1:],time_save[1:])):
 
             ###
-            u = it%3
-            v = it//3
-            im = axes[v][u].pcolormesh(self.EE/1e3, self.NN/1e3, wf[:,:,it], cmap="Greys_r",vmin=np.mean(wf)-1*np.std(wf), vmax=np.mean(wf)+1*np.std(wf))
+            u = ii%3
+            v = ii//3
+            im = axes[v][u].pcolormesh(self.EE/1e3, self.NN/1e3, wf[:,:,ii], cmap="Greys_r",vmin=vmin, vmax=vmax)
         #                        norm=colors.SymLogNorm(linthresh=np.mean(I), linscale=1,
         #                                              vmin=np.min(I), vmax=np.max(I), base=10))
             ###
             if u==2:
-                fig.colorbar(im, cax = axes[v][3], label=r"I / Rayleighs ? ", fraction=0.3, pad=-60.)
-            if u ==0:
+                cbar=fig.colorbar(im, cax = axes[v][4], label=r"I / Rayleighs ? ", fraction=0.3, pad=-60.)
+                cbar.formatter.set_useMathText(True)
+                axes[v][3].axis("off")
+            if u ==0 and v==1:
                 axes[v][u].set_ylabel(r"North distance / [$km$]")
-            if v==Nrow-1:
+            if v==Nrow-1 and u==1:
                 axes[v][u].set_xlabel(r"East distance / [$km$]")
             axes[v][u].set_aspect('equal', adjustable="box")
-        fig.suptitle("Vertically integrated VER, {:.0f} s".format(tw))
-        fig.subplots_adjust(wspace=-0.3, right=0.85, left =0.05)
+            axes[v][u].text(0.02, 0.98, "{:.0f} s".format(tw),
+                            transform=axes[v][u].transAxes,
+                            fontsize=8,
+                            verticalalignment='top',
+                            horizontalalignment='left',
+                            bbox=dict(facecolor='white', edgecolor='none', alpha=0.8, boxstyle='square,pad=0.3'))
+
+            axes[u][v].tick_params(axis='both', which='major', labelsize=8)
+
+        #fig.suptitle("Vertical velocity")
+        axes[0][1].set_title("Vertically integrated VER", pad=20)
+        fig.subplots_adjust(wspace=-0, hspace=0.3, right=0.85, left =0.05, top=0.93)
 
 
 
