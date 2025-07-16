@@ -5,13 +5,19 @@ import sys
 ###
 from scipy import interpolate, integrate
 from scipy import signal
-from scipy.signal import fftconvolve, lfilter, cont2discrete
+from scipy.signal import fftconvolve, lfilter, cont2discrete, butter, sosfilt 
 from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
 from scipy.fft import rfft, irfft, rfftfreq
 import scipy.fft as sfft 
 ###
 from pyrocko import gf
+from pyrocko import cake
 from pyrocko import moment_tensor as pmt
+from disba import PhaseDispersion, GroupDispersion
+import os
+from obspy.taup import TauPyModel
+from obspy.taup.velocity_model import VelocityModel
+from obspy.taup.taup_create import build_taup_model
 ###
 from functools import partial
 from multiprocessing import get_context
@@ -24,6 +30,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, SymLogNorm
 from matplotlib.animation import FuncAnimation
 import matplotlib.gridspec as gridspec
+from matplotlib import ticker
+import pycwt as wavelet
 ###
 import cmcrameri.cm as cmc
 from pdb import set_trace as bp
@@ -52,6 +60,8 @@ class Seismograms:
         - Read sampling rate, time, etc
         - Organise them in appropriate grids for location 
         """
+
+        self.depth = depth
         
         ### Remove sections that QSSP cannot calculate 
         self.north_shifts = north_shifts
@@ -185,7 +195,7 @@ class Seismograms:
         self.VEL = np.zeros((self.Ne, self.Nn, self.Nt), dtype=np.float64)
 
         ### Loop on calculated seismograms 
-        for ii, (trace, target) in enumerate(zip(self.synthetic_traces_v, self.targets_v)):
+        for ii, (trace, trace_u,target) in enumerate(zip(self.synthetic_traces_v,self.synthetic_traces_u, self.targets_v)):
 
             #print(f"Trace: {trace}, Location: N={target.north_shift/1e3}, E={target.east_shift/1e3}, depth={target.depth}")
 
@@ -198,6 +208,10 @@ class Seismograms:
             t = trace.get_xdata()
             x = trace.get_ydata()
 
+            ### Attempt: Make a traveling gaussian 
+            #r = np.sqrt(target.north_shift**2+target.east_shift**2)
+            #xi = np.exp(-(self.t_new-r/1e3)**2/50**2)*1/(r+100)
+
             ### Taper borders of signal before interpolating
             xt = x.copy()
             xt[:x.size//2] = x[:x.size//2]*signal.windows.tukey(x.size, alpha=0.1)[:x.size//2]
@@ -205,21 +219,24 @@ class Seismograms:
 
             ### interpolate over full time range 
             xi = interpolate.interp1d(t, xt, bounds_error=False, fill_value=0.0)(self.t_new)
+            ### Displacement
+            #xi_u = interpolate.interp1d(trace_u.get_xdata(), trace.get_ydata(), bounds_error=False, fill_value=(0.0, trace.get_ydata()[-1]))(self.t_new)
             
             # plot=True#False
             # if plot:
-            #     if ii==0:
+            #     if ii==30:
             #         fig, ax = plt.subplots() 
-            #         ax.plot(t, x, c="k") 
-            #         ax.plot(t_new, xi, c="r", ls ="--")
+            #         #ax.plot(t, x, c="k") 
+            #         ax.plot(self.t_new, xi, c="r", ls ="--")
             #         break
                 
             self.VEL[iee[0],inn[0],:] = xi
+            # self.VEL[iee[0],inn[0],:] = xi_u
 
         return()
 
 
-    def plot_traces(self, ns, es):
+    def plot_traces(self, ns, es, do_interpolate=False):
 
         idx = np.argmin(np.sqrt((self.lNN-ns)**2+(self.lEE-es)**2)) 
         # print(idx)
@@ -235,10 +252,21 @@ class Seismograms:
             fs = 1./(t[1]-t[0])
             x = entry.get_ydata()
 
-            t_new = np.arange(0., max(t.max(),2000), 1./fs)
-            xi = interpolate.interp1d(t, x, bounds_error=False, fill_value=0.0)(t_new)
-            t = t_new
-            ax_t.plot(t_new, xi, c="k")
+            if do_interpolate:
+                t_new = np.arange(0., max(t.max(),2000), 1./fs)
+                ### Taper borders of signal before interpolating
+                xt = x.copy()
+                xt[:x.size//2] = x[:x.size//2]*signal.windows.tukey(x.size, alpha=0.1)[:x.size//2]
+                xt[x.size//2:] = x[x.size//2:]*signal.windows.tukey(x.size, alpha=0.3)[x.size//2:]
+
+                ### interpolate over full time range 
+                xi = interpolate.interp1d(t, xt, bounds_error=False, fill_value=0.0)(t_new)
+                t = t_new
+                ax_t.plot(t_new, xi, c="k")
+            else:
+                t_new = t 
+                xi = x
+                ax_t.plot(t_new, xi, c="k")
             
             # Compute rFFT and frequencies
             X = np.fft.rfft(x)
@@ -323,6 +351,7 @@ att_exp = None
 amplification= None
 phase_shift_z = None
 f_VER_1_27 = None
+f_dVER_1_27 = None
 z_1_27_calc_m = None
 fourier_filtering = None
 b = None
@@ -331,14 +360,349 @@ loc_save = None
 itime_save = None
 gridded = None
 
+# =========================================================================================================
+### Calculate theoretical arrival times for P, S and RW 
+# =========================================================================================================
+def get_arrival_obspy(dist_m, source_depth, velocity_model, model=None, phase="s", r_planet=6371):
+    ### See https://github.com/obspy/obspy/issues/2816
+
+    if model is None:
+        r_planet = 6371.
+        got_moho=False
+        zmod = np.concatenate(([0], np.repeat(np.cumsum(velocity_model[:,0]),2)[:-1], [r_planet] ))
+        vpmod = np.concatenate((  np.repeat(velocity_model[:,1],2), [velocity_model[-1,1]] ))
+        vsmod = np.concatenate((  np.repeat(velocity_model[:,2],2), [velocity_model[-1,2]] ))
+        rhomod = np.concatenate(( np.repeat(velocity_model[:,3],2), [velocity_model[-1,3]] ))
+        ### Write velocity model to file .nd 
+        f = open("./data/model.nd", "w")
+        for zi, vpi, vsi, rhoi in zip(zmod, vpmod, vsmod, rhomod):        
+            f.write("   {:.1f}  {:.2f}  {:.2f}  {:.1f}\n".format(zi, vpi, vsi, rhoi))
+        f.close()
+
+        filename = "./data/model.nd"
+        vmodel = VelocityModel.read_nd_file(filename)
+        build_taup_model(filename, output_folder=os.getcwd()+"/data/", verbose=False)
+        model = TauPyModel(model=os.getcwd()+"/data/model.npz")
+ 
+    # model = TauPyModel(model="ak135")
+    dist_deg = dist_m/1e3 / (2.0 * r_planet * np.pi / 360.0)
+    # arrival_s = model.get_travel_times(source_depth_in_km=source_depth, distance_in_degree=dist_deg, phase_list=["tts+"])
+    if phase=="s":
+        arrival = model.get_travel_times(source_depth_in_km=source_depth/1e3, distance_in_degree=dist_deg, phase_list=["tts+"])
+    if phase=="p":
+        arrival = model.get_travel_times(source_depth_in_km=source_depth/1e3, distance_in_degree=dist_deg, phase_list=["ttp+"])
+
+    print([arr.time for arr in arrival])
+    print([arr.name for arr in arrival])
+    if len([arr.time for arr in arrival])==0:
+        t = -9000
+    else:
+        t = min([arr.time for arr in arrival])
+    
+    # arrivals = model.get_ray_paths(source_depth_in_km=source_depth/1e3, distance_in_degree=dist_deg, phase_list=["tts+"])
+    # ax = arrivals.plot_rays(plot_type="cartesian")
+
+    return(t, model)
+
+
+def model_cake_n_layers(velocity_model, qp=10000, qs=2000, radius=6371):
+        
+    materials = []
+    last_depth = 0.
+    depths = np.concatenate(([0], np.cumsum(velocity_model[:,0]) ))
+    for i_layer in range(velocity_model.shape[0]):
+        h, vp, vs, rho = velocity_model[i_layer,:]
+        last_depth += h
+        if last_depth > radius:
+            last_depth = radius
+        
+        layer = (last_depth*1e3, cake.Material(vp=vp*1e3, vs=vs*1e3, rho=rho*1e3, qp=qp, qs=qs))
+        materials.append(layer)
+    
+    mod = cake.LayeredModel()
+    last_depth = 0.
+    for i, (depth, material) in enumerate(materials):
+        #print(last_depth/1e3, depth/1e3)
+        layer = cake.HomogeneousLayer(ztop=last_depth, zbot=depth, m=material)#, name='fullspace')
+        last_depth = depth
+        mod.append(layer)
+        
+        # mod.append(cake.Interface(z=depth, name='{:d}'.format(i), 
+        #                             mabove=mod.material(depth, direction=-4), 
+        #                             mbelow=mod.material(depth, direction=4)))
+
+    return mod
+
+
+def get_arrival_cake(dist, source_depth, cake_model, re= 6371., phase='s'):
+    ### Source depth [m].
+    source_depth_m = source_depth #* 1e3
+
+    ### Distances as a numpy array [deg].
+    distance = dist* cake.m2d
+    
+    ### Define the phase to use.d
+    if phase=="s":
+        Phase = cake.PhaseDef('s')
+        Phase_d = cake.PhaseDef('S')
+    elif phase=="p":
+        Phase = cake.PhaseDef('p')
+        Phase_d = cake.PhaseDef('P')
+
+    rays = cake_model.arrivals([distance], phases=Phase, zstart=source_depth_m)
+    arr = [p.t for p in rays]
+
+    rays_d = cake_model.arrivals([distance], phases=Phase_d, zstart=source_depth_m)
+    arr += [p.t for p in rays_d]
+    # for r in rays_d:
+    #     print(r)
+    # for r in rays:
+    #     print(r)
+        # p.given_phase()
+    if len(arr)==0:
+        return(-9999)
+    else:
+        return(min(arr))
+    
+
+def theoretical_arrival_times(dist_m, source_depth, radius=6371, file='./data/Cold_100_for_QSSP.csv'):
+    layers = pd.read_csv(file, delim_whitespace=True, header=None, names=['z','vp','vs','rho','Qp','Qs'])  #skiprows=2, 
+    layers = layers[:]
+    h = np.diff(layers.z)
+    layers = layers.iloc[1:]
+    layers['h'] = h
+    layers = layers.iloc[:]
+    #layers.loc[layers.z==layers.z.max(), 'h'] = 0.
+    velocity_model = layers.loc[:,['h','vp','vs','rho']].values
+
+    ### frequencies (Hz) or periods (s) 
+    ff = 10**np.linspace(-3,0, 100)
+    T = 1 / ff[::-1]                  ### disba wants periods, low→high
+
+    ### Rayleigh‑wave phase velocity, fundamental mode (mode 0) ---
+    group_disp = GroupDispersion(*velocity_model[:66,:].T)               # unpack into h, vp, vs, ρ
+    phase_disp = PhaseDispersion(*velocity_model[:66,:].T)               # unpack into h, vp, vs, ρ
+    rayleigh_0 = group_disp(T, mode=0, wave="rayleigh")   # namedtuple
+    rayleigh_1 = group_disp(T, mode=1, wave="rayleigh")   # namedtuple
+    rayleigh_2 = group_disp(T, mode=2, wave="rayleigh")   # namedtuple
+    ###
+    t_r_0 = dist_m/rayleigh_0.velocity*1e-3
+    t_r_1 = dist_m/rayleigh_1.velocity*1e-3
+    t_r_2 = dist_m/rayleigh_2.velocity*1e-3
+
+    cake_model = model_cake_n_layers(velocity_model, qp=10000, qs=2000, radius=radius)
+    ###
+    t_p = get_arrival_cake(dist_m, source_depth, cake_model, re=radius, phase='p')
+    t_s = get_arrival_cake(dist_m, source_depth, cake_model, re=radius, phase='s')
+
+    # t_p, model_obspy = get_arrival_obspy(dist_m, source_depth, velocity_model, model=None, phase="p", r_planet=radius)
+    # t_s, model_obspy = get_arrival_obspy(dist_m, source_depth, velocity_model, model=None, phase="s", r_planet=radius)
+    # print(t_s, t_p)
+
+    return(t_p, t_s, [(rayleigh_0.period, t_r_0), (rayleigh_1.period, t_r_1), (rayleigh_2.period, t_r_2) ])
+
+
+# =========================================================================================================
+### Filtering function 
+# =========================================================================================================
+def butter_bandpass_filter(signal, fs, lowcut, highcut, order=4, axis=0):
+
+    sos = butter(order, [lowcut, highcut], btype='bandpass', fs=fs, output='sos')
+    filtered_signal = sosfilt(sos, signal, axis=axis)
+    return filtered_signal
+
+def butterworth_bandpass_response(f, lowcut, highcut, order):
+    ### Compute the Butterworth bandpass filter response as a function of frequency.
+
+    ### Avoid division by zero
+    f = np.abs(f)
+    ### Low-pass and high-pass Butterworth filters
+    if f==0.0:
+        h_high = 0
+    else:
+        h_high = 1 / np.sqrt(1 + (lowcut / f)**(2 * order))
+    h_low  = 1 / np.sqrt(1 + (f / highcut)**(2 * order))
+    return h_high * h_low
+
+
+# =========================================================================================================
+### Wavelet spectrogram 
+# =========================================================================================================
+def next_power_of_2(x):
+	x= int(x)
+	return 1 if x == 0 else 2**(x - 1).bit_length()
+
+def epoch_to_string(t, fmt):
+	x = mdates.num2date(t)
+	label = x.strftime(fmt)
+	return(label)
+
+def scientific_10(x, pos):
+	if abs(x)==0:
+		return r"${: 1.0f}$".format(x)
+	else :
+		exponent = np.floor(np.log10(abs(x)))
+		coeff = x/10**exponent
+		if int(coeff) ==1:
+			return r"$10^{{ {:.0f} }}$".format(exponent)
+		# if abs(exponent)==0:
+		#     return r"${: 2.1f} $".format(x)
+		# elif abs(exponent)==1:
+		#     return r"${: 2.0f} $".format(x)
+		# elif exponent ==2:
+		#     return r"${: 3.0f} $".format(x)
+		else :
+			return r"${: 2.0f} \times 10^{{ {:.0f} }}$".format(coeff,exponent)
+
+def plot_scalogram(sig, time, ax, ax_cb=None, title_unit='', font=10, graph="pmesh",
+                    fmin=None, fmax=None, cmap="magma", 
+                    t_origin = None, **kwargs):	
+    
+    dt = np.diff(time)[0]
+
+    pad = int(next_power_of_2(sig.size)-sig.size)     # Pads the time series with zeroes (recommended)
+    dj = 1/16                                                   # Uses 1/dj sub-octaves per octave
+    s0 = 2*dt                                                   # Start at a scale of 2*dt 
+    fdisp_min = 5e-4                                            # Minimum frequency to display
+    noct = int(np.log((1/s0)/fdisp_min)/np.log(2))              # Estimates the number of octaves from min frequency
+    J = noct / dj                                               # Number of octave / voices = total number of scales 
+    #print(noct, pad)
+    mother = 'MORLET'
+
+
+    #############################################
+    sig = signal.detrend(sig, type="linear")
+    sig *= signal.windows.tukey(sig.size, alpha=0.05)
+    if fmin is not None and fmax is not None:
+        butter_bandpass_filter(sig, 1/dt, fmin, fmax)
+    else:
+        fmax = 1/(2*dt)
+
+    
+    #############################################
+    # wave, period, scale, coi = wavelet(tr.data, dt, pad=pad, dj=dj, s0=s0, J1=J, mother=mother)  ### Web version
+    # f = 1/period
+    np.int = int
+    wave, scale, f, coi, fft, fftfreqs = wavelet.cwt(sig, dt, dj, s0, J,  wavelet.Morlet())   ### Pycwt version
+    p = np.abs(wave)**2  # compute wavelet power spectrum
+    # p /= scale[:, None]
+
+    ### Select data within fmin, fmax 
+    #bol = np.array((f > fmin, f < fmax)).all(axis=0)
+    bol = np.array((f > 0, f<1e6)).all(axis=0)
+    ### Select frequency axis 
+    fr = f[bol]
+    
+    #############################################
+    ### Set the DB scale
+    col = 10 * np.log10(p[bol, :])
+    if "dbrange" in kwargs:
+        if kwargs["dbrange"][0] == "min": 
+            dBmin = np.nanmin(col)
+        else:
+            dBmin = kwargs["dbrange"][0]
+        ###
+        if kwargs["dbrange"][1] == "max": 
+            dBmax = np.nanmax(col)		
+        else:
+            dBmax = kwargs["dbrange"][1]
+        # print(np.nanmin(col),np.nanmax(col))	
+    else :
+        #dBmin, dBmax = np.nanmin(col)/1.5, np.nanmax(col)
+        wrf = np.where((fr>5e-2) & (fr<2e-1))
+        dBmin = np.mean(col[wrf]) - 1*np.std(col[wrf])
+        dBmax = col[wrf].max()
+    
+    #print(dBmin, dBmax)
+
+    ############################################
+    if graph=="pmesh":
+        ### Option 1: pcolormesh
+        ct = ax.pcolormesh(time, fr, col,rasterized=True,
+                        vmin= dBmin, vmax=dBmax, cmap=cmap,shading='auto')
+        fpmin = fr.min()
+    elif graph=="cont":
+        ### Option 2: contourf
+        lev = np.linspace(dBmin, dBmax,40)
+        lev = (lev*10)//10
+        ct = ax.contourf(time,fr,col, levels=lev,
+                    cmap=cmap, extend="both")#,vmin= dBmin, vmax=dBmax)#, extend="both")
+        fpmin = fr.min()
+        for c in ct.collections:
+            c.set_rasterized(True)
+
+
+    #################################################################
+    ### Main axis decorations 
+    ax.set_yscale('log')
+    ax.set_ylabel('Frequency / $Hz$', fontsize=font)
+    ax.set_ylim([fpmin, fmax])
+    ax.get_yaxis().set_major_formatter(ticker.FuncFormatter(scientific_10))
+    ax.tick_params(axis='both', which='both', labelsize=font-2)
+
+    #################################################################
+    ### Region of significance 
+    coi[np.where(coi==0)] = 1e-15
+    ### Wavelets
+    # ax.fill_between(tc, 1/(coi * 0 + 1e8), [max(1/coii,1/period[-1]) for coii in coi ], 
+    # 					facecolor="k", edgecolor="none", alpha=0.4)
+    #print(coi, 1/coi)
+    #ax.plot(tc, 2/coi, 'k')
+
+    ### COLORBAR ####################################################
+    if ax_cb is not None:
+        cb = plt.colorbar(mappable=ct, cax=ax_cb)
+        ax_cb.set_ylabel(r'PSD / $dB$$\cdot$$Hz^{-1}$', fontsize=font)
+        ax_cb.tick_params(axis='both', which='both', labelsize=font-2)
+        ax_cb.yaxis.set_label_position('left')
+        ax_cb.set_title(title_unit ,fontsize=font)
+    
+    return(ax, ax_cb)
+
+
+# =========================================================================================================
+### Function to convert between different Radiance units and Rayleigh
+# =========================================================================================================
+def _factor_W_to_Rayleigh(L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
+    ### bandwidth should be in micrometer if Radiance is in W/m2/micrometer/sr
+    ### Note: In B Kenda's thesis, its 4pi.(Ep)^-1 and not (4pi.Ep⁻1) that is correct.
+    ### Correct definition of the Rayleigh: 1R = (1/4pi) * 1e10 photons/s/cm2/steradians 
+    hp = 6.6260701e-34  ### Planck's constant, J. s
+    c = 299792458       ### Speed of light, m/s
+    Ep = hp*c/(L*1e-6)    #### Energy of photon 
+
+    if dir=="specRadiance_to_Rayleigh":
+        ### Radiance is initially in W/m2/micrometer/sr 
+        factor = bandwidth/Ep*4*np.pi*1e-10 
+        return(factor)
+    elif dir=="Radiance_to_Rayleigh":
+        ### Radiance is initially in W/m2/sr 
+        factor = 1/Ep*4*np.pi*1e-10 
+        return(factor)
+    elif dir=="phRadiance_to_Rayleigh":
+        ### Radiance is initially in ph/s/m2/sr 
+        factor = 4*np.pi*1e-10 
+        return(factor)
+    elif dir=="Rayleigh_to_Radiance":
+        ### Radiance will be in W/m2/sr 
+        factor = 1/Ep*4*np.pi*1e-10 
+        return(1/factor)
+    elif dir=="Rayleigh_to_specRadiance":
+        ### Radiance will be in W/m2/micrometer/sr 
+        factor = bandwidth/Ep*4*np.pi*1e-10 
+        return(1/factor)
+    else: 
+        raise("Wrong conversion specified.")
+    
 
 # =========================================================================================================
 ### Function to define global parameters for parallelisation 
+# =========================================================================================================
 def init_worker(_list_of_locations, _fft_vzs, _att_exp, _amplification, _phase_shift_z,
-                _f_VER_1_27, _z_1_27_calc_m, _fourier_filtering,
-                _b, _a, _loc_save, _itime_save, _gridded):
+                _f_VER_1_27,_f_dVER_1_27, _z_1_27_calc_m, _fourier_filtering,
+                _b, _a, _loc_save, _itime_save, _gridded, _tf_phase_nightglow):
     global fft_vzs, att_exp, amplification, phase_shift_z
-    global f_VER_1_27, z_1_27_calc_m, fourier_filtering
+    global f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, fourier_filtering, tf_phase_nightglow
     global b, a
     global list_of_locations, loc_save, itime_save, gridded
 
@@ -348,6 +712,7 @@ def init_worker(_list_of_locations, _fft_vzs, _att_exp, _amplification, _phase_s
     amplification = _amplification
     phase_shift_z = _phase_shift_z
     f_VER_1_27 = _f_VER_1_27
+    f_dVER_1_27 = _f_dVER_1_27
     z_1_27_calc_m = _z_1_27_calc_m
     fourier_filtering = _fourier_filtering
     b = _b
@@ -355,6 +720,7 @@ def init_worker(_list_of_locations, _fft_vzs, _att_exp, _amplification, _phase_s
     loc_save = _loc_save
     itime_save = _itime_save
     gridded = _gridded
+    tf_phase_nightglow = _tf_phase_nightglow
 
 
 # =========================================================================================================
@@ -371,28 +737,44 @@ def propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_
     ### Back to time domain: inverse FFT to get vz_z for these altitudes
     vz_z = np.real(sfft.ifft(fft_vz_z, axis=1))  # shape: (2, Nt)
 
+    ### Remove mean (to help filtering?) 
+    #vz_z -= np.mean(vz_z, axis=1)[:,np.newaxis]
+
+    ### Filter high frequency and low frequency 
+    #vz_z = butter_bandpass_filter(vz_z, 1/0.5, 0.001, 0.1, axis=1)
+    #f = sfft.fftfreq(vz_z.shape[1], d=0.5)
+    #fft_vz_z *= butterworth_bandpass_response(f, 0.001, 0.1, 4)[np.newaxis, :]
+
     return(vz_z, fft_vz_z)
 
 
 # =========================================================================================================
 ### Function to transform velocity at a specific altitude into VER perturbation 
-def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b,a, tf_phase_nightglow=None, fourier_filtering=False, test=False):
+def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, tf_phase_nightglow=None, fourier_filtering=False, test=False):
 
     z_1_27_calc_km = z_1_27_calc_m/1e3
     fver_alt = f_VER_1_27(z_1_27_calc_km)[:,np.newaxis]
+    fdver_alt = f_dVER_1_27(z_1_27_calc_km)[:,np.newaxis]
+    #print(fdver_alt)
 
     ### Filter at all altitudes 
     if not fourier_filtering:
         ### Compute VER and its vertical gradient (numpy gradient) TIME DOMAIN 
         ver_vz = fver_alt * vz_z  # shape: (Nz, Nt)
+        ### VERSION WITH SMOOTH GRADIENT 
+        dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0) + fdver_alt*vz_z
         ### VERSION OF PL 
-        dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
+        #dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
+        # print(fver_alt)
+        # print(dver_vz_z)
+        # print(brou)
         ### VERSION OF BK 
         #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
-        ver_dvz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
+        ### TEST 
+        #ver_dvz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
 
         dver_z = lfilter(b, a, dver_vz_z, axis=1)
-        dver_z2 = lfilter(b, a, ver_dvz_z, axis=1)
+        #dver_z2 = lfilter(b, a, ver_dvz_z, axis=1)
 
         if test:
             gs_kw = dict(width_ratios=[1,0.5])
@@ -516,8 +898,18 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b,a, t
         ### VERSION OF BK 
         #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
 
-        dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=0).real
+        dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real
 
+        ### Simple linear detrend 
+        ### dver_z = signal.detrend(dver_z, type="linear", axis=1) ### way too slow 
+        start = dver_z[:,0][:,None]
+        end   = dver_z[:,50][:,None]
+        trend = np.linspace(0, 1, dver_z.shape[1])   
+        trend = start + (end - start)/(trend[50]-trend[0]) * trend  # shape (Nz, Nt)
+        dver_z = dver_z - trend
+
+    ### Ensure dVER starts at zero 
+    dver_z -= dver_z[:,0][:,np.newaxis]
 
     return(dver_z)
 
@@ -532,6 +924,10 @@ def integrate_line_of_sight(dver_z, z_calc_m):
     ### dver_z shape (Nz,Nt)
     amp_airglow = np.trapz(dver_z, x=z_calc_m, axis=0) # /np.trapz(f_VER(alts_dayglow), x=alts_dayglow,)
 
+    ### Convert to Rayleigh
+    #amp_airglow *= _factor_W_to_Rayleigh(1.27, dir="Radiance_to_Rayleigh")  ### VER in W/m3
+    amp_airglow *= _factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh")  ### VER in ph/s/m3
+
     ### Can then be converted into total airglow luminosity by adding the integral of ver(z) 
 
     return(amp_airglow)
@@ -539,15 +935,17 @@ def integrate_line_of_sight(dver_z, z_calc_m):
 
 # =========================================================================================================
 ### Wrapper function for calculating airglow at one location (outside of class to be parallelisable)
-def airglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification, phase_shift_z,f_VER_1_27,
-                        z_1_27_calc_m, fourier_filtering, b,a, loc_save, itime_save, gridded):
+# =========================================================================================================
+def airglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification, phase_shift_z,f_VER_1_27, f_dVER_1_27,
+                        z_1_27_calc_m, fourier_filtering, b,a, loc_save, itime_save, gridded, tf_phase_nightglow):
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
 
     vz_z, fft_vz_z = propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_shift_z)
     # if i_en == 120:
     #     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b, a, fourier_filtering= fourier_filtering, test=True)
     # else:
-    dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b, a, fourier_filtering= fourier_filtering)
+    dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
+                                        tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
     amp_airglow = integrate_line_of_sight(dver_z, z_1_27_calc_m)
             
     ### Store wavefield info 
@@ -569,8 +967,8 @@ def airglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification
 def worker_func(i):
     # location = list_of_locations[i]
     return airglow_at_location(i, list_of_locations, fft_vzs, att_exp, amplification, 
-                               phase_shift_z, f_VER_1_27, z_1_27_calc_m, 
-                               fourier_filtering, b, a, loc_save, itime_save, gridded)
+                               phase_shift_z, f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, 
+                               fourier_filtering, b, a, loc_save, itime_save, gridded, tf_phase_nightglow)
 
 
 # =========================================================================================================
@@ -585,6 +983,11 @@ class AirglowSignal:
         - The Pre-calculated seismograms and everything from Seismograms class
         - Parameters of the precision in altitude (Nz) for the airglow integrations 
         """
+
+        ### SOME CONSTANTS 
+        self.hp = 6.6260701e-34  ### Planck's constant, J. s
+        self.c = 299792458       ### Speed of light, m/s
+        self.unit = "photons"    ### Choose photons/s or Watts
 
         ### READ WAVEFORM PARAMETERS 
         self.__dict__.update(SEISMO.__dict__)
@@ -615,6 +1018,47 @@ class AirglowSignal:
         self.z_att_km = np.concatenate((np.arange(self.z_1_27_min,0, -self.dz_1_27_m/1e3)[1:][::-1], self.z_1_27_calc_km)) 
 
 
+    def _factor_photons_watt(self, L, dir="ps_to_W"):
+        Ep = self.hp*self.c/(L*1e-6)    #### Energy of photon 
+        
+        if dir=="ps_to_W": 
+            return(Ep)
+        elif dir=="W_to_ps":
+            return(1/Ep)
+        else: 
+            raise("Wrong conversion specified.")
+
+
+    def _factor_W_to_Rayleigh(self, L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
+        ### bandwidth should be in micrometer if Radiance is in W/m2/micrometer/sr
+        ### Note: In B Kenda's thesis, its 4pi.(Ep)^-1 and not (4pi.Ep⁻1) that is correct.
+        ### Correct definition of the Rayleigh: 1R = (1/4pi) * 1e10 photons/s/cm2/steradians 
+        Ep = self.hp*self.c/(L*1e-6)    #### Energy of photon 
+
+        if dir=="specRadiance_to_Rayleigh":
+            ### Radiance is initially in W/m2/micrometer/sr 
+            factor = bandwidth/Ep*4*np.pi*1e-10 
+            return(factor)
+        elif dir=="Radiance_to_Rayleigh":
+            ### Radiance is initially in W/m2/sr 
+            factor = 1/Ep*4*np.pi*1e-10 
+            return(factor)
+        elif dir=="phRadiance_to_Rayleigh":
+            ### Radiance is initially in ph/s/m2/sr 
+            factor = 4*np.pi*1e-10 
+            return(factor)
+        elif dir=="Rayleigh_to_Radiance":
+            ### Radiance will be in W/m2/sr 
+            factor = 1/Ep*4*np.pi*1e-10 
+            return(1/factor)
+        elif dir=="Rayleigh_to_specRadiance":
+            ### Radiance will be in W/m2/micrometer/sr 
+            factor = bandwidth/Ep*4*np.pi*1e-10 
+            return(1/factor)
+        else: 
+            raise("Wrong conversion specified.")
+    
+
     def _load_atmosphere(self, file_atmos, file_1_27_airglow, file_4_28_airglow, file_airglow_kenda,
                          use_kenda_data=False, gamma_kenda=11./9.):
 
@@ -625,39 +1069,72 @@ class AirglowSignal:
         self.f_c = interpolate.interp1d(atm_profile.altitude/1e3, atm_profile.c, kind='quadratic')
 
         ### Read data for 1_27 micrometer Oxygen volume emission rate
+        ### Units of VER: Photons/m3/s
         VER = pd.read_csv(file_1_27_airglow)
-        VER.columns=['VER', 'alt']
+        VER.columns=['VER', 'alt']     
+        ### TEST: Convert VER to W/m3 using the energy of a photon 
+        ### Ep = hc/lambda 
+        ### Lambda = 1.27 micrometer 
+        if self.unit=="watt":
+            VER.VER *= self._factor_photons_watt(1.27, dir="ps_to_W")
         self.f_VER_1_27 = interpolate.interp1d(VER.alt, VER.VER, kind='quadratic', bounds_error=False, fill_value=0.)
+        self.f_dVER_1_27 = interpolate.interp1d(VER.alt, np.gradient(VER.VER, VER.alt*1e3, edge_order=2), kind='quadratic', bounds_error=False, fill_value=0.)
+
+
         ### Other attempt: with curve_fit by two gaussians 
-        def double_positive_gaussian(x, a1, mu1, sigma1, a2, mu2, sigma2):
-            return (np.abs(a1) * np.exp(-((x - mu1) ** 2) / (2 * sigma1 ** 2)) +\
-                    np.abs(a2) * np.exp(-((x - mu2) ** 2) / (2 * sigma2 ** 2)))
-        
-        def asymmetric_gaussian_pulse(x, a, mu, sigma_left, sigma_right):
-            sigma = np.where(x < mu, sigma_left, sigma_right)
-            return np.abs(a) * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+        do_fit=True#False
+        if do_fit:
+            def double_positive_gaussian(x, a1, mu1, sigma1, a2, mu2, sigma2):
+                return (np.abs(a1) * np.exp(-((x - mu1) ** 2) / (2 * sigma1 ** 2)) +\
+                        np.abs(a2) * np.exp(-((x - mu2) ** 2) / (2 * sigma2 ** 2)))
+            def double_positive_gaussian_deriv(x, a1, mu1, sigma1, a2, mu2, sigma2):
+                return (-np.abs(a1) *(x-mu1)/sigma1**2* np.exp(-((x - mu1) ** 2) / (2 * sigma1 ** 2)) +\
+                        -np.abs(a2) *(x-mu2)/sigma2**2* np.exp(-((x - mu2) ** 2) / (2 * sigma2 ** 2)))
+            
+            def asymmetric_gaussian_pulse(x, a, mu, sigma_left, sigma_right):
+                sigma = np.where(x < mu, sigma_left, sigma_right)
+                return np.abs(a) * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+            
+            def asymmetric_gaussian_pulse_deriv(x, a, mu, sigma_left, sigma_right):
+                sigma = np.where(x < mu, sigma_left, sigma_right)
+                return -np.abs(a) * (x-mu)/sigma**2 * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
 
-        from scipy.optimize import curve_fit
-        initial_guess1 = [5e11, 100, 10, 1e10, 110, 10]
-        popt1, pcov1 = curve_fit(double_positive_gaussian, VER.alt, VER.VER, p0=initial_guess1)
-        initial_guess2 = [5e11, 100, 10, 11]
-        popt2, pcov2 = curve_fit(asymmetric_gaussian_pulse, VER.alt, VER.VER, p0=initial_guess2)
+            from scipy.optimize import curve_fit
+            initial_guess1 = [VER.VER.max(), 100, 10, VER.VER.max()/50, 110, 10]
+            popt1, pcov1 = curve_fit(double_positive_gaussian, VER.alt, VER.VER, p0=initial_guess1)
+            initial_guess2 = [VER.VER.max(), 100, 10, 11]
+            popt2, pcov2 = curve_fit(asymmetric_gaussian_pulse, VER.alt, VER.VER, p0=initial_guess2)
 
-        ### TEST
-        self.f_VER_1_27 = lambda x: asymmetric_gaussian_pulse(x, *popt2)
-        # self.f_VER_1_27 = lambda x: double_positive_gaussian(x, *popt1)
-        # fig, ax = plt.subplots() 
-        # z = np.linspace(70,150,100)
-        # ax.plot(z, self.f_VER_1_27(z), c="grey")
-        # ax.plot(z, double_positive_gaussian(z, *popt1) , c="r")
-        # ax.plot(z, asymmetric_gaussian_pulse(z, *popt2) , c="g")
-        # ax.plot(VER.alt, VER.VER, ls="", marker="d", c="k")
-        # ax.set_xlabel("Altitude / [$km$]")
+            ### TEST: USE AN INTERPOLATED PULSE 
+            self.f_VER_1_27 = lambda x: asymmetric_gaussian_pulse(x, *popt2)
+            self.f_dVER_1_27 = lambda x: asymmetric_gaussian_pulse_deriv(x, *popt2)*1e-3   ### PUT GRADIENT IN SI UNITS !!! 
+            # self.f_VER_1_27 = lambda x: double_positive_gaussian(x, *popt1)
+
+            fig, (ax1,ax2) = plt.subplots(2,1) 
+            z = np.linspace(70,150,100)
+            ax1.plot(z, self.f_VER_1_27(z), c="grey")
+            ax1.plot(z, double_positive_gaussian(z, *popt1) , c="r", label="Fit by 2 Gaussians")
+            ax1.plot(z, asymmetric_gaussian_pulse(z, *popt2) , c="g", label="Fit by asymetric Gaussian")
+            ax1.plot(VER.alt, VER.VER, ls="", marker="d", c="k", label="Data")
+            ax1.set_ylabel(r"VER, 1.27 $\mu m$ [$ph/s/m^3$]")
+            ax1.set_xlim(z.min(), z.max())
+            ax1.legend()
+            ###
+            ax2.plot(z, self.f_dVER_1_27(z), c="grey")
+            ax2.plot(z, double_positive_gaussian_deriv(z, *popt1)/1e3 , c="r", label="Fit by 2 Gaussian")
+            ax2.plot(z, asymmetric_gaussian_pulse_deriv(z, *popt2)/1e3 , c="g", label="Fit by asymetric Gaussian")
+            ax2.plot(VER.alt, np.gradient(VER.VER, VER.alt*1e3, edge_order=2), ls="", marker="d", c="k", label="Data, gradient order 2")
+            ax2.set_ylabel(r"Gradient of VER [$ph/s/m^4$]")
+            ax2.set_xlabel("Altitude / [$km$]")
+            ax2.set_xlim(z.min(), z.max())
+            ax2.legend()
+            fig.align_labels()
 
         self.z_1_27_min = VER.alt.min()
         self.z_1_27_max = VER.alt.max()
 
         ### Read data for 4_32 micromter CO2 volume emission rate
+        ### Units: W/m3 with a bandwidth of 0.03 micrometer 
         VER = pd.read_csv(file_4_28_airglow)
         VER.columns=['VER', 'alt']
         VER.to_csv(file_4_28_airglow.replace('.csv', '_scaled.csv'), index=False)
@@ -681,9 +1158,9 @@ class AirglowSignal:
         return 
 
     
-    def _load_absorption_amplification(self, file_atteunation_kenda, do_plot=False):
+    def _load_absorption_amplification(self, file_attenuation_kenda, do_plot=False):
         ### Then define a function to go from vz_surface to vz_z (amplification + attenuation)
-        atten = pd.read_csv(file_atteunation_kenda, header=[0])
+        atten = pd.read_csv(file_attenuation_kenda, header=[0])
         alts = atten.alt.unique()
         freq = atten.frequency.unique()
         FF, AA = np.meshgrid(freq, alts)
@@ -731,6 +1208,9 @@ class AirglowSignal:
             for i in range(0,800,80) :
                ax2.plot(freq, amplification[i,:], c=cols(i/799), label = "{:.1f}".format(alts[i])) 
             ax2b.plot(alts, amplification[:,0], c="k")
+            i90 = np.argmin(np.abs(alts-90))
+            amp90 =  amplification[i90,0]
+            ax2b.plot(alts, amplification[:,0]/amp90, c="k")
             ax2.set_yscale("log")
             ax2.set_xscale("log")
             ax2b.set_yscale("log")
@@ -749,11 +1229,25 @@ class AirglowSignal:
         return(f_alpha, f_alpha_2d, f_amplification)
     
 
-    def _def_filter_nightglow(self):
+    def _def_filter_nightglow(self, f_lim=1e-3):
         ### Transfer function for OPTION 2: scipy-defined filtering 
         #tau = 4460  # seconds
         num = [-self.tau]
         den = [self.tau, 1]
+        ###
+        ### First-order high-pass filter with cutoff f_lim:
+        ### H_hp(s) = s / (s + omega_c)
+        omega_c = 2 * np.pi * f_lim
+        num2 = [1, 0]
+        den2 = [1, omega_c]
+
+        ### Multiply the transfer functions
+        num = np.polymul(num, num2)
+        den = np.polymul(den, den2)
+        ### Do a second multiplication to get second order 
+        num = np.polymul(num, num2)
+        den = np.polymul(den, den2)
+
         system_d = cont2discrete((num, den), self.dt, method='bilinear')
         b, a = system_d[0].flatten(), system_d[1].flatten()
         return(b,a)
@@ -800,22 +1294,38 @@ class AirglowSignal:
 
         ### Pre-calculate the phase shift corresponding to the delay with altitude 
         self.phase_shift_z = np.zeros((self.Nz, self.Nt), dtype = np.complex64)
+        ### Integrated travel time from zero to airglow altitudes 
+        self.travel_time = self.dz_1_27_m * np.cumsum(1/self.f_c(self.z_att_km))
+        self.travel_time = self.travel_time[-self.Nz:]
         for jz, zz in enumerate(self.z_1_27_calc_km):
-            self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * zz / 0.3)
+            ### Constant propagation velocity og 300 m/s
+            #self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * zz / 0.3)
+
+            ### Integrated propagation velocity from zero to altitude z  
+            self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * self.travel_time[jz] )
 
         ### If using fourier filtering, prepare the filter: 
         if fourier_filtering:
             self.tf_phase_nightglow = -(self.tau/(1+1j*2*np.pi*freqsi[None,:]*self.tau)) 
+            ### Set no gain at low frequencies 
+            ### PB: Sets mean to zero but trend is still there
+            ### After detrending + resetting VER(0)=0, this effectively doesn't do anything... 
+            # self.tf_phase_nightglow[:,0] = 0.0 + 0.0j
+            
+            ### Better option: Applying a high-pass filter to VER(t): H_hp(i omega) = iomega / (i omega + omega_c)
+            self.tf_phase_nightglow *= (1j*freqsi[None,:] / (1j*freqsi[None,:] + 1e-4))**2
+        else:
+            self.tf_phase_nightglow = None
 
 
         ### Grid of amplification 
         self.amplification = self.f_amplification(self.z_1_27_calc_km)
 
         ### Grid of attenuation: OPTION WITHOUT CUMULATIVE SUM 
-        # FFver, ZZver = np.meshgrid(freqsp, self.z_1_27_calc_km)
-        # attenuation = self.f_alpha_2d((ZZver, FFver))
+        #FFver, ZZver = np.meshgrid(freqsp, self.z_1_27_calc_km)
+        #attenuation = self.f_alpha_2d((ZZver, FFver))
         ### Exponential of attenuation (supposing Np/km)
-        # self.att_exp = np.exp(-self.z_1_27_calc_km[:,np.newaxis]*attenuation)   ### meter or kilometer ? Cumulative sum or not ? 
+        #self.att_exp = np.exp(-self.z_1_27_calc_km[:,np.newaxis]*attenuation)   ### meter or kilometer ? Cumulative sum or not ? 
 
         ### NOTE: Cumulative sum works only if we are starting from z=0
         FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_km)
@@ -840,14 +1350,14 @@ class AirglowSignal:
                 #                                                                 save_wavefield, save_intensity_dver, 
                 #                                                                 loc_save, itime_save)
                 vz_z_it, dver_z_it, amp_airglow_it = airglow_at_location(i_en, list_of_locations, fft_vzs, self.att_exp, self.amplification, 
-                                                                          self.phase_shift_z,self.f_VER_1_27,
+                                                                          self.phase_shift_z,self.f_VER_1_27,self.f_dVER_1_27,
                                                                         self.z_1_27_calc_m, fourier_filtering, self.b, self.a, 
-                                                                        loc_save_idx, itime_save, self.gridded)
+                                                                        loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow, )
                 if self.gridded:
                     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
                     save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
                     save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
-                    save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save dVER at altitude z
+                    save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save Intensity at altitude z
 
             # t2 = ptime.time()
             # print(t2-t1)
@@ -857,13 +1367,12 @@ class AirglowSignal:
             ### NOTE: "fork" is much faster than "spawn" as spawn spends time copying array to different workers 
             ### However, fork doesn't work on windows/mac. To get a more flexible but fast parallelisation, 
             ### we need to move to joblib and memory maps. 
-            print(loc_save_idx)
             with get_context("fork").Pool(processes=n_cpus,
                                             initializer=init_worker,
                                             initargs=(list_of_locations, fft_vzs, self.att_exp, self.amplification, self.phase_shift_z,
-                                                    self.f_VER_1_27, self.z_1_27_calc_m, fourier_filtering,
+                                                    self.f_VER_1_27, self.f_dVER_1_27, self.z_1_27_calc_m, fourier_filtering,
                                                     self.b, self.a, 
-                                                    loc_save_idx, itime_save, self.gridded)
+                                                    loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow)
                                                 ) as p:
                 #results = p.map(worker_func, list_indices)
                 results = list(tqdm(p.imap(worker_func, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
@@ -880,7 +1389,7 @@ class AirglowSignal:
                     amp_airglow_it = r[2]
                     save_wavefield[i_east, i_north, :,:,0] = vz_z_it         ### Save velocity waveform 
                     save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at altitude z 
-                    save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save dVER at altitude z
+                    save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save Intensity at altitude z
 
             
         ### Save the full wavefield, but only at certain times 
@@ -911,46 +1420,168 @@ class AirglowSignal:
         vz_z_loc = np.load("./results/vz_z_{:d}_{:d}.npy".format(i_east, i_north))
         vz_z1 = vz_z_loc[iz1,:]
         vz_z2 = vz_z_loc[iz2,:]
+        ### Load integrated intensity and calculate background 
         I_dver_nightglow = np.load("./results/I_1_27_{:d}_{:d}.npy".format(i_east, i_north))
-        I_background_nightglow = np.trapz(self.f_VER_1_27(alts_airglow), alts_airglow*1e3 )
+        #I_background_nightglow = np.trapz(self.f_VER_1_27(alts_airglow), alts_airglow*1e3 )*self._factor_W_to_Rayleigh(1.27, dir="Radiance_to_Rayleigh")     ### if VER in W/m3
+        I_background_nightglow = np.trapz(self.f_VER_1_27(alts_airglow), alts_airglow*1e3 )*self._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh") ### if VER is in ph/s/m3
 
         ####################################################################################
         fig, (axt,axm, axb, axbb) = plt.subplots(4,1,figsize=(6,6) )
         axt.plot(self.t_new, self.VEL[i_east, i_north,:], c="k", lw=1) 
         axt.set_title("Ground signal at {:.0f} km E, {:.0f} km N".format(self.EE[i_east,i_north]/1e3,self.NN[i_east,i_north]/1e3))
-        axt.set_ylabel("Velocity / [$m/s$]")
+        axt.set_ylabel(r"Velocity / [$m/s$]")
         ###
         axm.plot(self.t_new, vz_z1, c="navy", lw=1, label="z={:.1f} km".format(alts_airglow[iz1]))
         axm.plot(self.t_new, vz_z2, c="purple", lw=1, label="z={:.1f} km".format(alts_airglow[iz2]))
         axm.set_title("Surface signal")
         axm.set_title("Amplified, propagated, attenuated")
-        axm.set_ylabel("Velocity / [$m/s$]")
+        axm.set_ylabel(r"Velocity / [$m/s$]")
         axm.legend(loc=2, frameon=False)
         ####################################################################################
         axb.plot(self.t_new, dver_z1/self.f_VER_1_27(alts_airglow[iz1])*100, c="navy", ls="-", label="z={:.1f} km".format(alts_airglow[iz1]), lw=1)
-        axb.plot(self.t_new, dver_z2/self.f_VER_1_27(alts_airglow[iz1])*100, c="purple", ls="-", label="z={:.1f} km".format(alts_airglow[iz2]), lw=1)
+        axb.plot(self.t_new, dver_z2/self.f_VER_1_27(alts_airglow[iz2])*100, c="purple", ls="-", label="z={:.1f} km".format(alts_airglow[iz2]), lw=1)
         axb.set_title("Percentage of perturbation of VER")
+
+        # axb.plot(self.t_new, dver_z1, c="navy", ls="-", label="z={:.1f} km".format(alts_airglow[iz1]), lw=1)
+        # axb.plot(self.t_new, dver_z2, c="purple", ls="-", label="z={:.1f} km".format(alts_airglow[iz2]), lw=1)
+        # axb.set_title("dVER")
         axb.legend(loc=2, frameon=False)
         axb.set_ylabel("dVER/VER / [%]")
-        axb.set_xlabel("Time / [$s$]")
+        axb.set_xlabel(r"Time / [$s$]")
         ####################################################################################
         ### VERTICAL INTEGRATION 
         axbb.plot(self.t_new, I_dver_nightglow + I_background_nightglow, c="k", ls="-", lw=1)
-        axbb.set_ylabel("Intensity")
-        axbb.set_xlabel("Time / [$s$]")
+        axbb.set_ylabel(r"Intensity / [$R$]")
+        axbb.set_xlabel(r"Time / [$s$]")
         axbb.set_title("Integration, vertical line of sight")
         for ax in [axt, axm, axb, axbb]:
-            ax.set_xlim(self.t_new.min(), self.t_new.max())
+            # ax.set_xlim(self.t_new.min(), self.t_new.max())
+            ax.set_xlim(self.t_new.min(), 1000)
         ###
         fig.align_labels()
         fig.tight_layout()
+
+        ####################################################################################
+        ### PLOT VER(z) at all altitudes 
+        fig2, (axm,axi) = plt.subplots(1,2,figsize=(10,6) )
+        maxv = np.max(np.abs(dver_z_loc))
+        dz = np.diff(alts_airglow)[0]
+        I = np.cumsum(dver_z_loc, axis=0)*dz
+        maxI = np.max(np.abs(I))
+        for iz, z in enumerate(alts_airglow):
+            axm.plot(self.t_new, dver_z_loc[iz,:]/maxv*dz*2 + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
+            axi.plot(self.t_new, I[iz,:]/maxI*dz*2 + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
         
+        axi.plot(self.t_new, I[iz,:]/maxI*dz*2 + z, c="r", lw=2, label="z={:.1f} km".format(alts_airglow[iz]))
+        
+        axm.set_title("Perturbation of VER")
+        axi.set_title("Integrated intensity")
+        # axm.legend(loc=2, frameon=False)
+        axm.set_ylabel("VER / [scaled to max waveform]")
+        axi.set_ylabel("Progressively summing Intensity")
+        axm.set_xlabel(r"Time / [$s$]")
+        axi.set_xlabel(r"Time / [$s$]")
+        ### VERTICAL INTEGRATION 
+        # axm.set_xlim(self.t_new.min(), self.t_new.max())
+        axm.set_xlim(480,700)
+        axi.set_xlim(480,700)
+        ###
+        fig2.align_labels()
+        fig2.tight_layout()
+        fig2.savefig("./Figures/VER_z.png")
+        
+
+    def plot_arrival_times(self, ax, t_p, t_s, t_rs, atmo_time=0, c="w"):
+        ### atmo_time: Time for propagation towards airglow layer 
+
+        ### PLOT P
+        ax.axvline(t_p+atmo_time , color=c, ls="--")
+        ax.text(t_p+atmo_time , 0.02, "P", color='black', ha='right', va='bottom',
+                transform=ax.get_xaxis_transform(),
+                bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, boxstyle='square,pad=0.2'))
+        ### PLOT S 
+        ax.axvline(t_s+atmo_time , color=c, ls="--")
+        ax.text(t_s+atmo_time , 0.02, "S", color='black', ha='right', va='bottom',
+                transform=ax.get_xaxis_transform(),
+                bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, boxstyle='square,pad=0.2'))
+        ### PLOT RW FUNDAMENTAL 
+        ax.plot(t_rs[0][1]+atmo_time ,1/t_rs[0][0], color=c, ls="--")
+        ax.text(t_rs[0][1][-1]+atmo_time , max(1/t_rs[0][0][-1], 1e-3), "RW, fund.", color='black', ha='right', va='bottom',
+            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, boxstyle='square,pad=0.2'))
+        ### PLOT ORDER 1
+        ax.plot(t_rs[1][1]+atmo_time ,1/t_rs[1][0], color=c, ls="-.")
+        ax.text(t_rs[1][1][-1]+atmo_time , max(1/t_rs[1][0][-1], 1e-3), "RW, 1", color='black', ha='right', va='bottom',
+            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, boxstyle='square,pad=0.2'))
+        ### PLOT ORDER 2
+        ax.plot(t_rs[2][1]+atmo_time ,1/t_rs[2][0], color=c, ls=":")
+        ax.text(t_rs[2][1][-1]+atmo_time , max(1/t_rs[2][0][-1], 1e-3), "RW, 2", color='black', ha='right', va='bottom',
+            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, boxstyle='square,pad=0.2'))
+        return()
+        
+
+    def plot_FTAN(self, loc_plot = None, idx_plot = None, z1=92, z2=112, fmin=1e-4, it=-1):
+        ### Convert east and north coordinate to indices if needed 
+        if loc_plot is None and idx_plot is None:
+            raise("Requires a couple of coordinates (loc_plot) or a couple of indices (idx_plot).")
+        elif loc_plot is not None:
+            idx = np.argmin(np.sqrt((self.NN-loc_plot[1])**2+(self.EE-loc_plot[0])**2)) 
+            i_east, i_north = np.unravel_index(idx, self.EE.shape)
+        else:
+            i_east, i_north = idx_plot[0], idx_plot[1]
+    
+        ### Find the right altitude
+        alts_airglow = self.z_1_27_calc_km
+        iz1 = np.where( np.abs(alts_airglow-z1) == np.min(np.abs(alts_airglow-z1)))[0][0]
+        iz2 = np.where( np.abs(alts_airglow-z2) == np.min(np.abs(alts_airglow-z2)))[0][0]
+        print(iz1, iz2)
+        ### Get appropriate signals 
+        dver_z_loc = np.load("./results/dver_z_{:d}_{:d}.npy".format(i_east, i_north))
+        dver_z1 = dver_z_loc[iz1,:]
+        dver_z2 = dver_z_loc[iz2,:]
+        vz_z_loc = np.load("./results/vz_z_{:d}_{:d}.npy".format(i_east, i_north))
+        vz_z1 = vz_z_loc[iz1,:]
+        vz_z2 = vz_z_loc[iz2,:]
+        ### Load integrated intensity and calculate background 
+        I_dver_nightglow = np.load("./results/I_1_27_{:d}_{:d}.npy".format(i_east, i_north))
+        I_background_nightglow = np.trapz(self.f_VER_1_27(alts_airglow), alts_airglow*1e3 )*self._factor_W_to_Rayleigh(1.27, dir="Radiance_to_Rayleigh")     ### if VER in W/m3
+        # I_background_nightglow = np.trapz(self.f_VER_1_27(alts_airglow), alts_airglow*1e3 )*self._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh") ### if VER is in ph/s/m3
+
+        rr = np.sqrt(self.EE[i_east,i_north]**2 + self.NN[i_east,i_north]**2)
+        ### Calculate theoretical arrival times
+        t_p, t_s, t_rs = theoretical_arrival_times(rr,self.depth)
+        air_travel_time = self.dz_1_27_m * np.cumsum(1/self.f_c(self.z_att_km))
+        air_travel_time = air_travel_time[-self.Nz:]
+
+        #######################################################
+        fig = plt.figure(figsize=(10,6), layout="constrained")
+        gs = fig.add_gridspec(2, 2,width_ratios=[60,2])
+        ###
+        ax = fig.add_subplot(gs[0, 0])
+        axc = fig.add_subplot(gs[0, 1])
+        vax = fig.add_subplot(gs[1, 0])
+        vaxc = fig.add_subplot(gs[1, 1])
+
+        ax.set_title("Ground signal at {:.0f} km E, {:.0f} km N".format(self.EE[i_east,i_north]/1e3,self.NN[i_east,i_north]/1e3))
+        ax, axc = plot_scalogram(self.VEL[i_east, i_north,:it], self.t_new[:it], ax, ax_cb=axc, title_unit=r'Velocity [$m/s$]', font=10, fmin=fmin)
+        self.plot_arrival_times(ax, t_p, t_s, t_rs)
+        ###
+        vax.set_title("Integration, vertical line of sight")
+        vax, vaxc = plot_scalogram(I_dver_nightglow[:it] + I_background_nightglow*0, self.t_new[:it], vax, ax_cb=vaxc, title_unit=r"Intensity / [$R$]", font=10, fmin=fmin)
+        self.plot_arrival_times(vax, t_p, t_s, t_rs, atmo_time=np.max(air_travel_time))
+        self.plot_arrival_times(vax, t_p, t_s, t_rs, atmo_time=np.min(air_travel_time), c="grey")
+
+        fig.suptitle("") 
+        fig.align_labels()
+
+        return()
+
 
     def plot_nightglow_images(self, time_save=None):       
 
         ### Wavefront (integrated intensity)
         #wf = np.load("./results/dver_t.npy")
         wf = np.load("./results/I_t.npy")
+        ### NOTE: Did not sum the background here
         vmin = np.mean(wf)-0.5*np.std(wf)
         vmax = np.mean(wf)+0.5*np.std(wf)
 
@@ -975,7 +1606,7 @@ class AirglowSignal:
         #                                              vmin=np.min(I), vmax=np.max(I), base=10))
             ###
             if u==2:
-                cbar=fig.colorbar(im, cax = axes[v][4], label=r"I / Rayleighs ? ", fraction=0.3, pad=-60.)
+                cbar=fig.colorbar(im, cax = axes[v][4], label=r"I / Rayleighs", fraction=0.3, pad=-60.)
                 cbar.formatter.set_useMathText(True)
                 axes[v][3].axis("off")
             if u ==0 and v==1:
