@@ -637,6 +637,7 @@ def plot_scalogram(sig, time, ax, ax_cb=None, title_unit='', font=10, graph="pme
     ax.set_yscale('log')
     ax.set_ylabel('Frequency / $Hz$', fontsize=font)
     ax.set_ylim([fpmin, fmax])
+    ax.set_xlim(time.min(), time.max())
     ax.get_yaxis().set_major_formatter(ticker.FuncFormatter(scientific_10))
     ax.tick_params(axis='both', which='both', labelsize=font-2)
 
@@ -763,6 +764,11 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
         ver_vz = fver_alt * vz_z  # shape: (Nz, Nt)
         ### VERSION WITH SMOOTH GRADIENT 
         dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0) + fdver_alt*vz_z
+        if test: 
+            fig, ax = plt.subplots()
+            ax.plot(z_1_27_calc_km, np.gradient(vz_z, z_1_27_calc_m, axis=0)[:,1000])
+            ax.plot(z_1_27_calc_km, vz_z[:,1000])
+            print(brou)
         ### VERSION OF PL 
         #dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
         # print(fver_alt)
@@ -776,7 +782,7 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
         dver_z = lfilter(b, a, dver_vz_z, axis=1)
         #dver_z2 = lfilter(b, a, ver_dvz_z, axis=1)
 
-        if test:
+        if test and 1==0:
             gs_kw = dict(width_ratios=[1,0.5])
             figb, (ax3b,ax3c) = plt.subplots(ncols=2, nrows=1, constrained_layout=True, gridspec_kw=gs_kw)
 
@@ -940,12 +946,19 @@ def airglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification
                         z_1_27_calc_m, fourier_filtering, b,a, loc_save, itime_save, gridded, tf_phase_nightglow):
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
 
+    # if (i_east, i_north) == loc_save[0]:
+    #     print(i_en, i_east, i_north)
+    
     vz_z, fft_vz_z = propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_shift_z)
-    # if i_en == 120:
-    #     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, b, a, fourier_filtering= fourier_filtering, test=True)
-    # else:
-    dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
-                                        tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
+    if i_en == 3360:
+        dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
+                                            tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering, test=True)
+    else:
+        dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
+                                            tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
+        dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
+                                            tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
+    
     amp_airglow = integrate_line_of_sight(dver_z, z_1_27_calc_m)
             
     ### Store wavefield info 
@@ -1110,25 +1123,25 @@ class AirglowSignal:
             self.f_dVER_1_27 = lambda x: asymmetric_gaussian_pulse_deriv(x, *popt2)*1e-3   ### PUT GRADIENT IN SI UNITS !!! 
             # self.f_VER_1_27 = lambda x: double_positive_gaussian(x, *popt1)
 
-            fig, (ax1,ax2) = plt.subplots(2,1) 
-            z = np.linspace(70,150,100)
-            ax1.plot(z, self.f_VER_1_27(z), c="grey")
-            ax1.plot(z, double_positive_gaussian(z, *popt1) , c="r", label="Fit by 2 Gaussians")
-            ax1.plot(z, asymmetric_gaussian_pulse(z, *popt2) , c="g", label="Fit by asymetric Gaussian")
-            ax1.plot(VER.alt, VER.VER, ls="", marker="d", c="k", label="Data")
-            ax1.set_ylabel(r"VER, 1.27 $\mu m$ [$ph/s/m^3$]")
-            ax1.set_xlim(z.min(), z.max())
-            ax1.legend()
-            ###
-            ax2.plot(z, self.f_dVER_1_27(z), c="grey")
-            ax2.plot(z, double_positive_gaussian_deriv(z, *popt1)/1e3 , c="r", label="Fit by 2 Gaussian")
-            ax2.plot(z, asymmetric_gaussian_pulse_deriv(z, *popt2)/1e3 , c="g", label="Fit by asymetric Gaussian")
-            ax2.plot(VER.alt, np.gradient(VER.VER, VER.alt*1e3, edge_order=2), ls="", marker="d", c="k", label="Data, gradient order 2")
-            ax2.set_ylabel(r"Gradient of VER [$ph/s/m^4$]")
-            ax2.set_xlabel("Altitude / [$km$]")
-            ax2.set_xlim(z.min(), z.max())
-            ax2.legend()
-            fig.align_labels()
+            # fig, (ax1,ax2) = plt.subplots(2,1) 
+            # z = np.linspace(70,150,100)
+            # ax1.plot(z, self.f_VER_1_27(z), c="grey")
+            # ax1.plot(z, double_positive_gaussian(z, *popt1) , c="r", label="Fit by 2 Gaussians")
+            # ax1.plot(z, asymmetric_gaussian_pulse(z, *popt2) , c="g", label="Fit by asymetric Gaussian")
+            # ax1.plot(VER.alt, VER.VER, ls="", marker="d", c="k", label="Data")
+            # ax1.set_ylabel(r"VER, 1.27 $\mu m$ [$ph/s/m^3$]")
+            # ax1.set_xlim(z.min(), z.max())
+            # ax1.legend()
+            # ###
+            # ax2.plot(z, self.f_dVER_1_27(z), c="grey")
+            # ax2.plot(z, double_positive_gaussian_deriv(z, *popt1)/1e3 , c="r", label="Fit by 2 Gaussian")
+            # ax2.plot(z, asymmetric_gaussian_pulse_deriv(z, *popt2)/1e3 , c="g", label="Fit by asymetric Gaussian")
+            # ax2.plot(VER.alt, np.gradient(VER.VER, VER.alt*1e3, edge_order=2), ls="", marker="d", c="k", label="Data, gradient order 2")
+            # ax2.set_ylabel(r"Gradient of VER [$ph/s/m^4$]")
+            # ax2.set_xlabel("Altitude / [$km$]")
+            # ax2.set_xlim(z.min(), z.max())
+            # ax2.legend()
+            # fig.align_labels()
 
         self.z_1_27_min = VER.alt.min()
         self.z_1_27_max = VER.alt.max()
@@ -1276,6 +1289,7 @@ class AirglowSignal:
             loc_save_EN = []
             for ies, ins in loc_save_idx:
                 loc_save_EN.append((self.EE[ies,ins], self.NN[ies, ins] ))
+        print(loc_save_idx)
 
         ### Save wavefield every 10 timesteps by default
         if time_save is None: 
@@ -1345,6 +1359,7 @@ class AirglowSignal:
             # import time as ptime 
             # t1=ptime.time()
             for i_en in tqdm(list_indices, total=len(list_ieast), disable=False):
+                i_en = 3360
                 # save_wavefield, save_intensity_dver = self.airglow_at_location(i_en, 
                 #                                                                 fft_vzs, fourier_filtering, 
                 #                                                                 save_wavefield, save_intensity_dver, 
@@ -1397,7 +1412,7 @@ class AirglowSignal:
         np.save("./results/I_t", save_intensity_dver)
 
 
-    def plot_nightglow_traces(self, loc_plot = None, idx_plot = None, z1=92, z2=112, photons_nightglow=2e4):
+    def plot_nightglow_traces(self, loc_plot = None, idx_plot = None, z1=92, z2=112, photons_nightglow=2e4, time_end=2000):
 
         ### Convert east and north coordinate to indices if needed 
         if loc_plot is None and idx_plot is None:
@@ -1456,7 +1471,7 @@ class AirglowSignal:
         axbb.set_title("Integration, vertical line of sight")
         for ax in [axt, axm, axb, axbb]:
             # ax.set_xlim(self.t_new.min(), self.t_new.max())
-            ax.set_xlim(self.t_new.min(), 1000)
+            ax.set_xlim(self.t_new.min(), time_end)
         ###
         fig.align_labels()
         fig.tight_layout()
@@ -1570,7 +1585,7 @@ class AirglowSignal:
         self.plot_arrival_times(vax, t_p, t_s, t_rs, atmo_time=np.max(air_travel_time))
         self.plot_arrival_times(vax, t_p, t_s, t_rs, atmo_time=np.min(air_travel_time), c="grey")
 
-        fig.suptitle("") 
+        #fig.suptitle("") 
         fig.align_labels()
 
         return()
@@ -1582,8 +1597,8 @@ class AirglowSignal:
         #wf = np.load("./results/dver_t.npy")
         wf = np.load("./results/I_t.npy")
         ### NOTE: Did not sum the background here
-        vmin = np.mean(wf)-0.5*np.std(wf)
-        vmax = np.mean(wf)+0.5*np.std(wf)
+        vmin = -1#np.mean(wf)-0.5*np.std(wf)
+        vmax = 1#np.mean(wf)+0.5*np.std(wf)
 
         if time_save ==None: 
             time_save = self.t_new[::int(np.ceil(self.Nt//9))]
@@ -1626,6 +1641,92 @@ class AirglowSignal:
         #fig.suptitle("Vertical velocity")
         axes[0][1].set_title("Vertically integrated VER", pad=20)
         fig.subplots_adjust(wspace=-0, hspace=0.3, right=0.85, left =0.05, top=0.93)
+
+
+    def plot_vertical_slice(self, time_save=None, wtype="VER"):       
+
+        ### Wavefront (integrated intensity)
+        if wtype=="VER":
+            wf = np.load("./results/dver_t.npy")[:,:,:,:,1]  ### Select dver 
+            vmin = -1e9#np.mean(wf)-0.5*np.std(wf)
+            vmax = 1e9#np.mean(wf)+0.5*np.std(wf)
+        elif wtype=="VEL":
+            wf = np.load("./results/dver_t.npy")[:,:,:,:,0]  ### Select dver 
+            vmin = -1#np.mean(wf)-0.5*np.std(wf)
+            vmax = 1#np.mean(wf)+0.5*np.std(wf)
+        
+
+        ### We want to plot a slice center on North=0 
+        inn = np.where(self.NN==0.0)
+        wf = wf[inn]
+        EE, ZZ = np.meshgrid(self.EE[0,:], self.z_1_27_calc_km)
+
+        if time_save ==None: 
+            time_save = self.t_new[::int(np.ceil(self.Nt//9))]
+            itime_save = range(0,self.Nt,int(np.ceil(self.Nt//9)))
+            
+        Nrow = int(np.ceil(len(time_save[1:])/3))
+        Ncol = 5
+        fig = plt.figure(figsize=(10, int(8 * (Nrow / Ncol))))#, layout="constrained")
+        gs = gridspec.GridSpec(nrows=Nrow, ncols=Ncol, width_ratios=[1]*(Ncol-2) + [0.01,0.05], figure=fig)
+
+        # Create the main axes grid
+        axes = np.empty((Nrow, Ncol), dtype=object)
+        for i in range(Nrow):
+            for j in range(Ncol-2):
+                axes[i, j] = fig.add_subplot(gs[i, j])
+
+        # Create the spanning axis on the last column (column 4), spanning rows 0 and 1
+        ax_cb = fig.add_subplot(gs[:2, Ncol-1])  # spans both rows, column Ncol (i.e. column 4 if Ncol=4)
+
+                
+
+        for ii, (it, tw)  in enumerate(zip(itime_save[1:],time_save[1:])):
+
+            ###
+            u = ii%3
+            v = ii//3
+            im = axes[v][u].pcolormesh(EE/1e3, ZZ, wf[:,:,ii].T, cmap="Greys_r",#vmin=vmin, vmax=vmax)
+                                norm=SymLogNorm(linthresh=np.std(wf)/10, linscale=1,
+                                                      vmin=vmin, vmax=vmax, base=10))
+            ###
+            # if u==2 and v==0:
+            #     cbar=fig.colorbar(im, cax = axes[v][4], label=r"$\Delta$VER / [$W/m^3$]", fraction=0.3, pad=-60.)
+            #     #cbar.formatter.set_useMathText(True)
+            #     axes[v][3].axis("off")
+            # axes[1][3].axis("off")
+            # axes[2][3].axis("off")
+            # axes[1][4].axis("off")
+            # axes[2][4].axis("off")
+            if wtype=="VER":
+                cbar=fig.colorbar(im, cax = ax_cb, label=r"$\Delta$VER / [$W/m^3$]", fraction=0.3, pad=-60.)
+            elif wtype =="VEL":
+                cbar=fig.colorbar(im, cax = ax_cb, label=r"$v_z$ / [$m/s$]", fraction=0.3, pad=-60.)
+            #     
+            if u ==0 and v==1:
+                axes[v][u].set_ylabel(r"Altitude / [$km$]")
+            if u != 0 :
+                axes[v][u].set_yticklabels([])
+            else:
+                axes[v][u].set_yticks([90,100,110,120])
+            if v==Nrow-1 and u==1:
+                axes[v][u].set_xlabel(r"East distance / [$km$]")
+            #axes[v][u].set_aspect('equal', adjustable="box")
+            axes[v][u].text(0.02, 0.98, "{:.0f} s".format(tw),
+                            transform=axes[v][u].transAxes,
+                            fontsize=8,
+                            verticalalignment='top',
+                            horizontalalignment='left',
+                            bbox=dict(facecolor='white', edgecolor='none', alpha=0.8, boxstyle='square,pad=0.3'))
+
+            axes[u][v].tick_params(axis='both', which='major', labelsize=8)
+
+        #fig.suptitle("Vertical velocity")
+        if wtype=="VER":
+            axes[0][1].set_title("VER Perturbation with altitude", pad=20)
+        elif wtype=="VEL":
+            axes[0][1].set_title("Velocity Perturbation with altitude", pad=20)
+        fig.subplots_adjust(wspace=0.2, hspace=0.5, right=0.85, left =0.05, top=0.85, bottom=0.15)
 
 
 
@@ -1973,7 +2074,8 @@ def get_dVER_nightglow(TIMES_DAYGLOW, ALTS_DAYGLOW, tau, c, Az, dzAz, f0, df0dt,
     if vz_and_dzv is None:
         dzv = -(1/c)*df0dt(times_rescaled)*Az(ALTS_DAYGLOW) + dzAz(ALTS_DAYGLOW)*f0(times_rescaled)
     else:
-        _, f_dvz = vz_and_dzv
+        ### Note mf: Going there
+        f_vz, f_dvz = vz_and_dzv
         shape_init = times_rescaled.shape
         #dzv = f_dvz(times_rescaled.ravel(), ALTS_DAYGLOW.ravel(), grid=False).reshape(shape_init)
         pts = np.stack([times_rescaled.ravel(), ALTS_DAYGLOW.ravel()], axis=-1)
@@ -1983,6 +2085,14 @@ def get_dVER_nightglow(TIMES_DAYGLOW, ALTS_DAYGLOW, tau, c, Az, dzAz, f0, df0dt,
     
     tf_phase_nightglow = -(tau/(1+1j*omega[:,None]*tau)) 
     signal = f_VER(ALTS_DAYGLOW)*dzv
+    ### Code test mf 
+    # fig, ax = plt.subplots()
+    # plt.plot(ALTS_DAYGLOW[0,:], dzv[1000,:]*1e3, label="dvz/dz")
+    # plt.plot(ALTS_DAYGLOW[0,:], f_vz(pts).reshape(shape_init)[1000,:], label="vz")
+    # plt.legend()
+    # plt.xlim(90,120)
+    # plt.show()
+    # brrout 
     
     fourier_filtering = False
     if fourier_filtering:
