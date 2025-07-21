@@ -97,7 +97,7 @@ class Seismograms:
                                                             self.north_shifts, self.east_shifts,
                                                             store_id, min_dist, max_dist, 
                                                             base_folder, self.gridded)
-        
+                                                            
             self.synthetic_traces_u += synthetic_traces_u
             self.synthetic_traces_v += synthetic_traces_v
             self.targets_u += targets_u
@@ -184,10 +184,11 @@ class Seismograms:
         return synthetic_traces, synthetic_traces_u, waveform_targets, waveform_targets_u, lNN, lEE
     
 
-    def arrange_interpolate_synthetics(self, tmax=2500):
+    def arrange_interpolate_synthetics(self, tmax=2500, dt=0.5):
         
         ### Define time array 
         t = self.synthetic_traces_v[0].get_xdata()
+        self.dt = max(self.dt, dt)
         self.t_new = np.arange(0., max(t.max(), tmax), self.dt)
         self.Nt = self.t_new.size
 
@@ -232,6 +233,7 @@ class Seismograms:
                 
             self.VEL[iee[0],inn[0],:] = xi
             # self.VEL[iee[0],inn[0],:] = xi_u
+        print("Size of VEL: ", self.VEL.nbytes)
 
         return()
 
@@ -764,11 +766,11 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
         ver_vz = fver_alt * vz_z  # shape: (Nz, Nt)
         ### VERSION WITH SMOOTH GRADIENT 
         dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0) + fdver_alt*vz_z
-        if test: 
-            fig, ax = plt.subplots()
-            ax.plot(z_1_27_calc_km, np.gradient(vz_z, z_1_27_calc_m, axis=0)[:,1000])
-            ax.plot(z_1_27_calc_km, vz_z[:,1000])
-            print(brou)
+        # if test: 
+        #     fig, ax = plt.subplots()
+        #     ax.plot(z_1_27_calc_km, np.gradient(vz_z, z_1_27_calc_m, axis=0)[:,1000])
+        #     ax.plot(z_1_27_calc_km, vz_z[:,1000])
+        #     print(brou)
         ### VERSION OF PL 
         #dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
         # print(fver_alt)
@@ -950,14 +952,15 @@ def airglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification
     #     print(i_en, i_east, i_north)
     
     vz_z, fft_vz_z = propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_shift_z)
-    if i_en == 3360:
-        dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
-                                            tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering, test=True)
-    else:
-        dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
-                                            tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
-        dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
-                                            tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
+    # if i_en == 3360:
+    #     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
+    #                                         tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering, test=True)
+    # else:
+    #     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
+    #                                         tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
+    ###
+    dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
+                                        tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
     
     amp_airglow = integrate_line_of_sight(dver_z, z_1_27_calc_m)
             
@@ -1389,7 +1392,7 @@ class AirglowSignal:
                                                     self.b, self.a, 
                                                     loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow)
                                                 ) as p:
-                #results = p.map(worker_func, list_indices)
+                
                 results = list(tqdm(p.imap(worker_func, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
                 t2 = ptime.time()
             print("Time for airglow calculation: {:.1f} s".format(t2-t0))
@@ -1484,10 +1487,10 @@ class AirglowSignal:
         I = np.cumsum(dver_z_loc, axis=0)*dz
         maxI = np.max(np.abs(I))
         for iz, z in enumerate(alts_airglow):
-            axm.plot(self.t_new, dver_z_loc[iz,:]/maxv*dz*2 + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
-            axi.plot(self.t_new, I[iz,:]/maxI*dz*2 + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
+            axm.plot(self.t_new, dver_z_loc[iz,:]/maxv*dz*5 + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
+            axi.plot(self.t_new, I[iz,:]/maxI*dz*5 + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
         
-        axi.plot(self.t_new, I[iz,:]/maxI*dz*2 + z, c="r", lw=2, label="z={:.1f} km".format(alts_airglow[iz]))
+        axi.plot(self.t_new, I[iz,:]/maxI*dz*5 + z, c="r", lw=2, label="z={:.1f} km".format(alts_airglow[iz]))
         
         axm.set_title("Perturbation of VER")
         axi.set_title("Integrated intensity")
@@ -1498,8 +1501,8 @@ class AirglowSignal:
         axi.set_xlabel(r"Time / [$s$]")
         ### VERTICAL INTEGRATION 
         # axm.set_xlim(self.t_new.min(), self.t_new.max())
-        axm.set_xlim(480,700)
-        axi.set_xlim(480,700)
+        axm.set_xlim(self.t_new.min(), time_end)
+        axi.set_xlim(self.t_new.min(), time_end)
         ###
         fig2.align_labels()
         fig2.tight_layout()
@@ -1616,7 +1619,8 @@ class AirglowSignal:
             ###
             u = ii%3
             v = ii//3
-            im = axes[v][u].pcolormesh(self.EE/1e3, self.NN/1e3, wf[:,:,ii], cmap="Greys_r",vmin=vmin, vmax=vmax)
+            ### Changed from ii 
+            im = axes[v][u].pcolormesh(self.EE/1e3, self.NN/1e3, wf[:,:,int(it*wf.shape[-1]/self.Nt)], cmap="Greys_r",vmin=vmin, vmax=vmax)
         #                        norm=colors.SymLogNorm(linthresh=np.mean(I), linscale=1,
         #                                              vmin=np.min(I), vmax=np.max(I), base=10))
             ###
@@ -1729,6 +1733,210 @@ class AirglowSignal:
         fig.subplots_adjust(wspace=0.2, hspace=0.5, right=0.85, left =0.05, top=0.85, bottom=0.15)
 
 
+    def plot_phase_velocity_extraction(self, method=3, file_model='./data/Cold_100_for_QSSP.csv', n_modes=6, plot_wf=False):
+
+        ### Load the Intensity matrix 
+        I_matrix = np.load("./results/I_t.npy")
+
+        ### Cut on a line 
+        north_index = I_matrix.shape[1]//2
+        I_east = I_matrix[north_index,:,:]
+        dist_east = self.EE[north_index,:]/1e3
+        dE = np.diff(self.EE[north_index,:])[0]
+        Nw = I_east.shape[0]
+
+        ### PLOT SIGNALS WITH DISTANCE #####################################################
+        if plot_wf:
+            fig, ax = plt.subplots()
+            for i in range(Nw):
+                wv = I_east[i,:]
+                wv/=np.max(np.abs(wv))
+                #ax.plot(AIRGLOW.t_new,wv*dE/1e3-AIRGLOW.EE[north_index,i]/1e3, c="k", lw=1)
+                ax.fill_between(self.t_new,-self.EE[north_index,i]/1e3,wv*dE/1e3-self.EE[north_index,i]/1e3,
+                                color='k',alpha=1, lw=0.5)
+            ax.set_xlabel("Time / [$s$]")
+            ax.set_ylabel("Distance / [$km$]")
+            fig.tight_layout()
+        ####################################################################################
+
+
+        #####################################################################################
+        ### Calculate theoretical phase velocity ############################################
+        from disba import PhaseDispersion, GroupDispersion
+        layers = pd.read_csv(file_model, delim_whitespace=True, 
+                                header=None, names=['z','vp','vs','rho','Qp','Qs'])  #skiprows=2, 
+        layers = layers[:]
+        h = np.diff(layers.z)
+        layers = layers.iloc[1:]
+        layers['h'] = h
+        layers = layers.iloc[:]
+        velocity_model = layers.loc[:,['h','vp','vs','rho']].values
+
+        ### frequencies (Hz) or periods (s) 
+        ff = 10**np.linspace(-3,0, 100)[::-1]
+        T = 1 / ff                                ### disba wants periods, low→high
+
+        ### Rayleigh‑wave phase velocity, fundamental mode (mode 0) ---
+        #group_disp = GroupDispersion(*velocity_model[:66,:].T)               # unpack into h, vp, vs, ρ
+        phase_disp = PhaseDispersion(*velocity_model[:66,:].T)                # unpack into h, vp, vs, ρ
+        rayleigh_i = [phase_disp(T, mode=i, wave="rayleigh") for i in range(n_modes)]   # namedtuple
+        v_r_i = [rayleigh_i[i].velocity*1e3 for i in range(n_modes)]
+        #######################################################################################
+
+        #######################################################################################
+        ### Calculate spectrum 
+        FFTsig = sfft.fft(I_east, axis=1)
+        freqsi = np.fft.fftfreq(self.Nt, d=self.dt)  # frequency axis
+        mask = freqsi > 0
+        freqs = freqsi[mask]
+
+        ### OPTION 1 ########################################################################
+        ### CROSS-SPECTRUM METHOD 
+        if method==1:
+            ### Calculate phase delay: 
+            ic = (Nw)//2
+            lags = np.arange(-self.Nt + 1, self.Nt)*self.dt
+            ### Calculate spectrum 
+            ###
+            ### Cross-spectrum every step
+            CC = FFTsig[1:,:] * np.conj(FFTsig[:-1,:])
+            ### Calculate Cross spectrum from reference pixel to others 
+            idx = np.arange(0,Nw,1)
+            iref = 10                           ### Reference point
+            ical = np.delete(idx, iref)         ### All the others
+            CC2 = FFTsig[iref:iref+1,:] * np.conj(FFTsig[ical,:])
+            dist_c2 = dist_east[ical]-dist_east[iref]  ### Distance to reference point 
+
+            ### Phase difference at each frequency
+            phase_spectrum = np.array([np.angle(CC[i,:]) for i in range(Nw-1)])  # in radians
+            phase_spectrum2 = np.array([np.angle(CC2[i,:]) for i in range(Nw-1)])  # in radians
+            ### Unwrap phase 
+            unwrapped_phase = np.unwrap(phase_spectrum, axis=1)
+            unwrapped_phase2 = np.unwrap(phase_spectrum2, axis=1)
+
+            # Keep only positive frequencies
+            phase_spectrum = phase_spectrum[:,mask]
+            phase_spectrum2 = phase_spectrum2[:,mask]
+            unwrapped_phase = unwrapped_phase[:,mask]
+            unwrapped_phase2 = unwrapped_phase2[:,mask]
+
+            ### Calculate phase velocity
+            phase_vel = 2*np.pi*freqs[None,:]*dE/np.abs(unwrapped_phase)
+            phase_vel2 = 2*np.pi*freqs[None,:]*dist_c2[:,None]*1e3/np.abs(unwrapped_phase2)
+
+            ### PLOT METHOD 1 #####################################################################
+            fig, (ax1,ax2,ax3) = plt.subplots(3,1,height_ratios=[0.3,1,1], figsize=(8,12)) 
+            #ax.plot(freqs, phase_spectrum) 
+            for i in range(Nw-1):
+                ax1.plot(freqs, unwrapped_phase[i,:], c="k", lw=1,alpha=0.2, ) 
+            ax1.set_ylabel("Unwrapped phase / [$rad.$]")
+            ###
+            #Close=[4,6,3]
+            cols = plt.get_cmap("viridis")
+            for i in range(Nw-1):#Close:
+                ax2.plot(freqs, phase_vel[i-1,:], c=cols(i/(Nw-1)), lw=1, alpha=0.2, 
+                        label="CC {:.0f}-{:.0f} km".format(dist_east[i], dist_east[i+1]))
+                ax3.plot(freqs, phase_vel2[i-1,:], c=cols(i/(Nw-1)), lw=1, alpha=0.2, 
+                        label="CC {:.0f} km".format(dist_c2[i]))
+            ###
+            cmap=plt.get_cmap("magma")
+            for i in range(n_modes):
+                ax2.plot(1/rayleigh_i[i].period, v_r_i[i], c=cmap(i/n_modes), ls="--", label=r"Theoretical $v_{\varphi}$"+ "{:d}".format(i))
+                ax3.plot(1/rayleigh_i[i].period, v_r_i[i], c=cmap(i/n_modes), ls="--", label=r"Theoretical $v_{\varphi}$"+ "{:d}".format(i))
+            ax2.legend(framealpha=1, edgecolor="none")
+            ax3.legend(framealpha=1, edgecolor="none")
+            ###
+            ax1.set_xscale("log")
+            ax2.set_xscale("log")
+            ax3.set_xscale("log")
+            ax2.set_ylabel("Phase Velocity / [$m/s$]")
+            ax2.set_xlabel("Frequency / [$Hz$]")
+            ax3.set_ylabel("Phase Velocity / [$m/s$]")
+            ax3.set_xlabel("Frequency / [$Hz$]")
+            ax1.set_xlim(ff.min(), ff.max())
+            ax2.set_xlim(ff.min(), ff.max())
+            ax2.set_ylim(2e3,8e3)
+            ax3.set_xlim(ff.min(), ff.max())
+            ax3.set_ylim(2e3,8e3)
+            fig.tight_layout()
+            fig.align_labels()
+
+        ### OPTION 2 ########################################################################
+        ### TAU-P METHOD 
+        elif method==2:
+            ### First, construct an array of slowness p:
+            Np = 200
+            parr = 1/np.linspace(12,0.1, Np)
+            ### Construct an linear interpolation function for Intensity in time : 
+            f_Ieast = interpolate.interp1d(self.t_new, I_east, kind='linear', axis=1, bounds_error=False, fill_value=0)
+            ### Next, calculate slant integral over line.
+            TP = np.zeros((self.Nt,Np)) 
+            for ip, p in enumerate(parr):
+                t_eval = self.t_new[None,:] + dist_east[:,None]*p
+                ### Sum over waves 
+                slant = np.array([f_Ieast(t_eval[i,:])[i,:] for i in range(Nw)])
+                #print(slant.shape)
+                TP[:,ip] = np.trapz(slant, dist_east*1e3, axis=0)
+            ### Take fourier transform:
+            WP = sfft.fft(TP, axis=0)   
+            ### PLOT METHOD 2 #############################################################################
+            ### Convert P to velocity and plot 
+            figs, axs = plt.subplots(figsize=(8,6))
+            A = np.abs(WP[mask,:].T)
+            A = A/np.max(A, axis=0)[None,:]
+            axs.pcolormesh(freqs,1/parr, A, cmap="magma")
+            ###
+            cmap=plt.get_cmap("magma")
+            lss = ["-", "--", "-.", ":","--", "-.", ":" ]
+            for i in range(n_modes):
+                axs.plot(1/rayleigh_i[i].period, v_r_i[i]/1e3, c="w", lw = 1, ls=lss[i])
+                axs.plot([],[], c="k", ls=lss[i], lw=1.5, label=r"Theoretical $v_{\varphi}$"+ "{:d}".format(i))
+            axs.legend(framealpha=1, edgecolor="none")
+            ###
+            axs.set_xlabel("Frequency / [$Hz$]")
+            axs.set_ylabel("Velocity / [$km/s$]")
+            axs.set_xscale("log")
+            axs.set_xlim(freqs.min(), 1)#freqs.max())
+            figs.tight_layout()      
+
+        ### OPTION 3 ########################################################################
+        ### TAU-P IN FREQUENCY DOMAIN 
+        elif method==3:
+            ### First, construct an array of velocity c:
+            Nc = 200
+            carr = np.linspace(0.1,12, Nc)
+            ### Take fourier transform of signal with distance
+            ###
+            ### Next, calculate slant integral over line.
+            WC = np.zeros((self.Nt,Nc)) 
+            for icc, c in enumerate(carr):
+                phase_shift = np.exp(1j*2*np.pi*freqsi[None,:]*dist_east[:,None]/c)
+                ### Sum over waves 
+                shifted = FFTsig  * phase_shift
+                ### Normalize by complex amplitude
+                shifted = shifted/np.abs(shifted)
+                #print(slant.shape)
+                #WC[:,ic] = np.trapz(shifted, dist_east*1e3, axis=0)
+                WC[:,icc] = np.abs(np.sum(shifted, axis=0)*dE)  
+            
+            ### PLOT METHOD 3 #############################################################################
+            figw, axw = plt.subplots(figsize=(8,6))
+            A = np.abs(WC[mask,:].T)
+            A = A/np.max(A, axis=0)[None,:]
+            axw.pcolormesh(freqs,carr, A, cmap="magma")
+            ###
+            cmap=plt.get_cmap("magma")
+            lss = ["-", "--", "-.", ":","--", "-.", ":" ]
+            for i in range(n_modes):
+                axw.plot(1/rayleigh_i[i].period, v_r_i[i]/1e3, c="w", lw = 1, ls=lss[i])
+                axw.plot([],[], c="k", ls=lss[i], lw=1.5, label=r"Theoretical $v_{\varphi}$"+ "{:d}".format(i))
+            axw.legend(framealpha=1, edgecolor="none")
+            ###
+            axw.set_xlabel("Frequency / [$Hz$]")
+            axw.set_ylabel("Velocity / [$km/s$]")
+            axw.set_xscale("log")
+            axw.set_xlim(freqs.min(), 1)#freqs.max())
+            figw.tight_layout()
 
 
 # =========================================================================================================
