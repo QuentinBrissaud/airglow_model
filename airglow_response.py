@@ -1015,13 +1015,15 @@ class AirglowSignal:
         file_4_28_airglow      = f'{folder_data}VER_profile_dayglow.csv'
         file_airglow_kenda     = f'{folder_data}VER_profiles_from_kenda.csv'
         file_attenuation_kenda = f'{folder_data}attenuation_kenda.csv'
+        dir_attenuation_GA     = '/staff/marouchka/Documents/ATMOSPHERE/ATTENUATION/Gil_Averbuch_profiles/'
         use_kenda_data         = False
         
         ### CONSTRUCT INTERPOLATED ATMOSPHERIC MODELS 
         self._load_atmosphere(file_atmos, file_1_27_airglow, file_4_28_airglow, file_airglow_kenda, use_kenda_data=use_kenda_data)
 
         ### CONSTRUCT INTERPOLATED ABSPORTION / AMPLIFICATION MODELS 
-        self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(file_attenuation_kenda)#, do_plot=True)
+        self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(file_attenuation_kenda=file_attenuation_kenda, do_plot=True)
+        # self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(dir_attenuation_GA=dir_attenuation_GA, do_plot=True)
 
         ### Definitions for the calculation of 1_27 micrometer nightglow 
         self.tau = 4460 # s
@@ -1174,59 +1176,124 @@ class AirglowSignal:
         return 
 
     
-    def _load_absorption_amplification(self, file_attenuation_kenda, do_plot=False):
-        ### Then define a function to go from vz_surface to vz_z (amplification + attenuation)
-        atten = pd.read_csv(file_attenuation_kenda, header=[0])
-        alts = atten.alt.unique()
-        freq = atten.frequency.unique()
-        FF, AA = np.meshgrid(freq, alts)
+    def _load_absorption_amplification(self, file_attenuation_kenda=None, dir_attenuation_GA=None, do_plot=False):
 
-        alpha = atten.alpha.values.reshape((alts.size, freq.size))
-        #print(alpha.shape)
-        if do_plot:
-            fig2, ax2 = plt.subplots()
-            cols = plt.get_cmap("viridis")
-            for i in range(0,800,80) :
-               ax2.plot(freq, alpha[i,:], c=cols(i/799), label = "{:.1f}".format(alts[i])) 
-            ax2.set_yscale("log")
-            ax2.set_xscale("log")
-            ax2.legend(title="Altitude / [$km$]", ncol=2, framealpha=0.5, edgecolor="none")
-            ax2.set_xlabel("Frequency / [$Hz$]")
-            ax2.set_ylabel("Attenuation / [??]")
+        if file_attenuation_kenda is not None:
+            ### Then define a function to go from vz_surface to vz_z (amplification + attenuation)
+            atten = pd.read_csv(file_attenuation_kenda, header=[0])
+            alts = atten.alt.unique()
+            freq = atten.frequency.unique()
+            FF, AA = np.meshgrid(freq, alts)
 
-        ### 1D interpolation for alpha (as a function of frequency / for each individual altitude)
-        f_alpha = interpolate.interp1d(freq, alpha, axis=1, bounds_error=False, fill_value=0.0)
-        ### 2D interpolation (as a function of frequency + altitude)
-        f_alpha_2d = interpolate.RegularGridInterpolator((alts,freq), alpha, method='linear',fill_value=0, bounds_error=False)
+            ### Factor to got from Np/m to dB/km
+            ### NOTE: We now think that B. Kenda's data is in dB/km. 
+            fac_Npm_dBkm = 20*np.log10(np.e)*1000
+            alpha_dBkm = atten.alpha.values.reshape((alts.size, freq.size))
+            alpha_Npm = alpha_dBkm/fac_Npm_dBkm
+
+            #print(alpha_dBkm.shape)
+            if do_plot:
+                fig2, ax2 = plt.subplots()
+                cols = plt.get_cmap("viridis")
+                for i in range(0,800,80) :
+                    ax2.plot(freq, alpha_dBkm[i,:], c=cols(i/799), label = "{:.1f}".format(alts[i])) 
+                ax2.set_yscale("log")
+                ax2.set_xscale("log")
+                ax2.legend(title="Altitude / [$km$]", ncol=2, framealpha=0.5, edgecolor="none")
+                ax2.set_xlabel("Frequency / [$Hz$]")
+                ax2.set_ylabel("Attenuation / [dB/km]")
+
+
+            ### 1D interpolation for alpha (as a function of frequency / for each individual altitude)
+            ### We use Np/m values for this for the exponential calculation
+            f_alpha = interpolate.interp1d(freq, alpha_Npm, axis=1, bounds_error=False, fill_value=0.0)
+            ### 2D interpolation (as a function of frequency + altitude)
+            f_alpha_2d = interpolate.RegularGridInterpolator((alts,freq), alpha_Npm, method='linear',fill_value=0, bounds_error=False)
+            ### Read amplification from file 
+            amplification = atten.amplification.values.reshape((alts.size, freq.size))[:,0]
+            ### 1D interpolatiom (it doesn't depend on frequency)
+            f_amplification = interpolate.interp1d(alts, amplification, kind='quadratic')
+
+        elif dir_attenuation_GA is not None:
+            files_unsorted = [dir_attenuation_GA + f for f in os.listdir(dir_attenuation_GA)]
+            freq_unsorted = [float(f.split("Hz.csv")[0]) for f in os.listdir(dir_attenuation_GA)]
+
+            files = [x for _, x in sorted(zip(freq_unsorted, files_unsorted))]
+            freq = np.sort(freq_unsorted)
+
+            alpha = [] 
+            for f in files:
+                dat = np.genfromtxt(f, skip_header=1, usecols=(0,5), delimiter=",")
+                alpha.append(dat)
+            alpha_dBkm = np.array(alpha)[:,:,1].T
+            ### We know that GA's data is in dB/km
+            fac_Npm_dBkm = 20*np.log10(np.e)*1000
+            alpha_Npm = alpha_dBkm/fac_Npm_dBkm
+            ### Shape: Nfreq, NZ
+            alts = np.array(alpha)[0,:,0]
+
+            if do_plot:
+                fig2, ax2 = plt.subplots()
+                cols = plt.get_cmap("viridis")
+                for i in range(0,alts.size,40) :
+                    ax2.plot(freq, alpha_dBkm[i,:], c=cols(i/(alts.size-1)), label = "{:.1f}".format(alts[i])) 
+                ax2.set_yscale("log")
+                ax2.set_xscale("log")
+                ax2.legend(title="Altitude / [$km$]", ncol=2, framealpha=0.5, edgecolor="none")
+                ax2.set_xlabel("Frequency / [$Hz$]")
+                ax2.set_ylabel("Attenuation / [dB/km]")
+
+            ### 1D interpolation for alpha (as a function of frequency / for each individual altitude)
+            ### We use Np/m values for this for the exponential calculation
+            f_alpha = interpolate.interp1d(freq, alpha_Npm, axis=1, bounds_error=False, fill_value=0.0)
+            ### 2D interpolation (as a function of frequency + altitude)
+            f_int = RectBivariateSpline(alts, np.log10(freq), np.log10(alpha_Npm), kx=3, ky=3)
+            def f_alpha_2d (zf):
+                z = zf[0]
+                f = np.log10(zf[1])
+                int_res = 10**f_int.ev(z, f)
+                return( int_res )
+
+            ### Calculate amplification from conservation of kinetic energy
+            ### and out atmosphere model: 
+            amplification = self.f_rho(0)*self.f_c(0)/ (self.f_rho(alts)*self.f_c(alts))
+            ### 1D interpolatiom (it doesn't depend on frequency)
+            def f_amplification(z):
+                return(self.f_rho(0)*self.f_c(0)/ (self.f_rho(z)*self.f_c(z)))
+            
+
+
         if do_plot:
             fig, (axa, axb) = plt.subplots(1,2, figsize=(8,4))
-            axa.pcolormesh(freq, alts, np.log10(alpha), cmap="viridis", vmin = np.log10(alpha.min()), vmax = np.log10(alpha.max()))
+            axa.pcolormesh(freq, alts, np.log10(alpha_dBkm), cmap="viridis", vmin = np.log10(alpha_dBkm.min()), vmax = np.log10(alpha_dBkm.max()))
             axa.set_xscale("log")
             axa.set_ylabel("Altitude / [$km$]")
             axa.set_xlabel("Frequency / [$Hz$]")
             axa.set_title("Raw attenuation (log)")
+            axa.set_xlim(freq.min(), freq.max())
             ###
             f_test = 10**np.linspace(np.log10(freq.min()), np.log10(freq.max()), 200)
             z_test = np.linspace(0, alts.max(), 400)
             FF, ZZ = np.meshgrid(f_test, z_test)
             RES = f_alpha_2d((ZZ,FF)) 
-            axb.pcolormesh(f_test, z_test, np.log10(RES), cmap="viridis", vmin = np.log10(alpha.min()), vmax = np.log10(alpha.max()))
+            axb.pcolormesh(f_test, z_test, np.log10(RES*fac_Npm_dBkm), cmap="viridis", vmin = np.log10(alpha_dBkm.min()), vmax = np.log10(alpha_dBkm.max()))
             axb.set_xscale("log")
             axb.set_ylabel("Altitude / [$km$]")
             axb.set_xlabel("Frequency / [$Hz$]")
             axb.set_title("Interpolated attenuation (log)")
+            axb.set_xlim(freq.min(), freq.max())
+            ###
             fig.tight_layout()
             ###
 
-        amplification = atten.amplification.values.reshape((alts.size, freq.size))
         if do_plot:
             fig2, (ax2, ax2b) = plt.subplots(1,2,figsize=(8,4))
-            for i in range(0,800,80) :
-               ax2.plot(freq, amplification[i,:], c=cols(i/799), label = "{:.1f}".format(alts[i])) 
-            ax2b.plot(alts, amplification[:,0], c="k")
+            # for i in range(0,800,80) :
+            #    ax2.plot(freq, amplification[i,:], c=cols(i/799), label = "{:.1f}".format(alts[i])) 
+            ax2b.plot(alts, amplification, c="k")
             i90 = np.argmin(np.abs(alts-90))
-            amp90 =  amplification[i90,0]
-            ax2b.plot(alts, amplification[:,0]/amp90, c="k")
+            amp90 =  amplification[i90]
+            # ax2b.plot(alts, amplification[:,0]/amp90, c="k")
             ax2.set_yscale("log")
             ax2.set_xscale("log")
             ax2b.set_yscale("log")
@@ -1238,9 +1305,7 @@ class AirglowSignal:
             ax2b.set_ylabel("Amplification / [??]")
             fig2.suptitle("Amplification with altitude")
             fig2.tight_layout()
-        #f_amplification = interpolate.interp1d(freq, amplification, kind='quadratic', axis=1, bounds_error=False, fill_value=0.0)
-        ### 1D interpolatiom (it doesn't depend on frequency)
-        f_amplification = interpolate.interp1d(alts, amplification[:,0], kind='quadratic')
+        
         
         return(f_alpha, f_alpha_2d, f_amplification)
     
@@ -1347,7 +1412,7 @@ class AirglowSignal:
         ### NOTE: Cumulative sum works only if we are starting from z=0
         FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_km)
         attenuation = self.f_alpha_2d((ZZver2, FFver))
-        att_exp = np.exp(-self.dz_1_27_m*np.cumsum(attenuation, axis=0)/1e3)   ### SupposesNp/km 
+        att_exp = np.exp(-self.dz_1_27_m*np.cumsum(attenuation, axis=0))   ### Supposes Np/m 
         self.att_exp = att_exp[-self.Nz:]
         # fig, ax = plt.subplots() 
         # for i in range(self.Nz):
@@ -1600,8 +1665,8 @@ class AirglowSignal:
         #wf = np.load("./results/dver_t.npy")
         wf = np.load("./results/I_t.npy")
         ### NOTE: Did not sum the background here
-        vmin = -1#np.mean(wf)-0.5*np.std(wf)
-        vmax = 1#np.mean(wf)+0.5*np.std(wf)
+        vmin = np.mean(wf)-0.5*np.std(wf) #-1
+        vmax = np.mean(wf)+0.5*np.std(wf) # 1
 
         if time_save ==None: 
             time_save = self.t_new[::int(np.ceil(self.Nt//9))]
