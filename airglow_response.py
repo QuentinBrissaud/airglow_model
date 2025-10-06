@@ -46,7 +46,7 @@ fold ="./"
 class Seismograms:
 # =========================================================================================================
 
-    def __init__(self, mw=6.5, strike=0., dip=45., rake=45., depth = None, stf_type=None, effective_duration=25., 
+    def __init__(self, mw=6.5, strike=45., dip=45., rake=45., depth = None, stf_type=None, effective_duration=25., 
                         store_ids_dists=[('GF_venus_Cold100_qssp',50e3,8000e3)], 
                         north_shifts = None, east_shifts= None, gridded = True, 
                         base_folder='/projects/restricted/infrasound/data/infrasound/2023_Venus_inversion/'):
@@ -81,10 +81,9 @@ class Seismograms:
         else: 
             self.Nn = north_shifts.size  
             self.Ne = 1 
-            self.EE, self.NN = north_shifts, east_shifts
-            iEE, iNN = np.meshgrid(range(north_shifts.size), range(east_shifts.size))   ### Indices of grid 
-            self.iEE, self.iNN = iEE.ravel(), iNN.ravel()
-
+            self.EE, self.NN = east_shifts, north_shifts
+            self.iEE = range(east_shifts.size)
+            self.iNN = range(north_shifts.size)
 
 
         ### Build waveform from Green's functions, using several stores if needed. 
@@ -124,10 +123,9 @@ class Seismograms:
             lNN = lNNo[(np.sqrt(lNNo**2+lEEo**2)>=min_dist) & (np.sqrt(lNNo**2+lEEo**2)<max_dist)]
             lEE = lEEo[(np.sqrt(lNNo**2+lEEo**2)>=min_dist) & (np.sqrt(lNNo**2+lEEo**2)<max_dist)]
         else: 
-            # iNN, iEE = np.arange(north_shifts.size), np.arange(east_shifts.size)
-            # shape_init = iNN.shape
-            # iNN, iEE = iNN.ravel(), iEE.ravel()
-            lNN, lEE = north_shifts, east_shifts
+            lNNo, lEEo = north_shifts, east_shifts
+            lNN = lNNo[(np.sqrt(lNNo**2+lEEo**2)>=min_dist) & (np.sqrt(lNNo**2+lEEo**2)<max_dist)]
+            lEE = lEEo[(np.sqrt(lNNo**2+lEEo**2)>=min_dist) & (np.sqrt(lNNo**2+lEEo**2)<max_dist)]
 
         ### Source Time function properties 
         stf = dict()
@@ -140,8 +138,11 @@ class Seismograms:
                 stf['stf'] = gf.HalfSinusoidSTF(duration=effective_duration)
 
         ### Moment Tensor definition
-        scalar_moment = 10**(1.5 * mw + 9.1)
-        mt_strike = pmt.MomentTensor(strike=strike, dip=dip, rake=rake, scalar_moment=scalar_moment).m6()
+        if mw ==None: 
+            mt_strike = [1,1,1,1,1,1]
+        else:
+            scalar_moment = 10**(1.5 * mw + 9.1)
+            mt_strike = pmt.MomentTensor(strike=strike, dip=dip, rake=rake, scalar_moment=scalar_moment).m6()
         mt = dict(mnn=mt_strike[0], mee=mt_strike[1], mdd=mt_strike[2], mne=mt_strike[3], mnd=mt_strike[4], med=mt_strike[5],)
         mt_source = gf.MTSource(lat=0., lon=0., depth=depth, **mt, **stf)
 
@@ -194,9 +195,10 @@ class Seismograms:
 
         ### Where to store interpolated seismograms (grid)
         self.VEL = np.zeros((self.Ne, self.Nn, self.Nt), dtype=np.float64)
+        self.DIS = np.zeros((self.Ne, self.Nn, self.Nt), dtype=np.float64)
 
         ### Loop on calculated seismograms 
-        for ii, (trace, trace_u,target) in enumerate(zip(self.synthetic_traces_v,self.synthetic_traces_u, self.targets_v)):
+        for ii, (trace, trace_u, target) in enumerate(zip(self.synthetic_traces_v,self.synthetic_traces_u, self.targets_v)):
 
             #print(f"Trace: {trace}, Location: N={target.north_shift/1e3}, E={target.east_shift/1e3}, depth={target.depth}")
 
@@ -207,7 +209,9 @@ class Seismograms:
                 iee = [0]
 
             t = trace.get_xdata()
+            tu = trace_u.get_xdata()
             x = trace.get_ydata()
+            xu = trace_u.get_ydata()
 
             ### Attempt: Make a traveling gaussian 
             #r = np.sqrt(target.north_shift**2+target.east_shift**2)
@@ -217,9 +221,14 @@ class Seismograms:
             xt = x.copy()
             xt[:x.size//2] = x[:x.size//2]*signal.windows.tukey(x.size, alpha=0.1)[:x.size//2]
             xt[x.size//2:] = x[x.size//2:]*signal.windows.tukey(x.size, alpha=0.3)[x.size//2:]
+            ### Same for displacement traces
+            xtu = xu.copy()
+            xtu[:xu.size//2] = xu[:xu.size//2]*signal.windows.tukey(xu.size, alpha=0.1)[:xu.size//2]
+            xtu[xu.size//2:] = xu[xu.size//2:]*signal.windows.tukey(xu.size, alpha=0.3)[xu.size//2:]
 
             ### interpolate over full time range 
             xi = interpolate.interp1d(t, xt, bounds_error=False, fill_value=0.0)(self.t_new)
+            xiu = interpolate.interp1d(tu, xtu, bounds_error=False, fill_value=0.0)(self.t_new)
             ### Displacement
             #xi_u = interpolate.interp1d(trace_u.get_xdata(), trace.get_ydata(), bounds_error=False, fill_value=(0.0, trace.get_ydata()[-1]))(self.t_new)
             
@@ -232,8 +241,9 @@ class Seismograms:
             #         break
                 
             self.VEL[iee[0],inn[0],:] = xi
+            self.DIS[iee[0],inn[0],:] = xiu
             # self.VEL[iee[0],inn[0],:] = xi_u
-        print("Size of VEL: ", self.VEL.nbytes)
+        print("Size of VEL, DIS (bytes): ", self.VEL.nbytes)
 
         return()
 
@@ -355,6 +365,8 @@ phase_shift_z = None
 f_VER_1_27 = None
 f_dVER_1_27 = None
 z_1_27_calc_m = None
+z_4_28_calc_m = None
+fac_temperature = None 
 fourier_filtering = None
 b = None
 a = None
@@ -526,6 +538,17 @@ def butterworth_bandpass_response(f, lowcut, highcut, order):
     h_low  = 1 / np.sqrt(1 + (f / highcut)**(2 * order))
     return h_high * h_low
 
+
+def butter_filter(signal, fs, lowcut, highcut, order=10, axis=0):
+    ### TODO: Remove redundant function 
+
+    if lowcut is None:
+        sos = butter(order, Wn=highcut, btype='lowpass', analog=False, fs=fs, output='sos')
+    elif highcut is None:
+        sos = butter(order, Wn=lowcut, btype='highpass', analog=False, fs=fs, output='sos')
+    else:
+        sos = butter(order, Wn=[lowcut, highcut], btype='bandpass', analog=False, fs=fs, output='sos')
+    return sosfilt(sos, signal, axis=axis)
 
 # =========================================================================================================
 ### Wavelet spectrogram 
@@ -701,7 +724,7 @@ def _factor_W_to_Rayleigh(L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
 # =========================================================================================================
 ### Function to define global parameters for parallelisation 
 # =========================================================================================================
-def init_worker(_list_of_locations, _fft_vzs, _att_exp, _amplification, _phase_shift_z,
+def init_worker_nightlow(_list_of_locations, _fft_vzs, _att_exp, _amplification, _phase_shift_z,
                 _f_VER_1_27,_f_dVER_1_27, _z_1_27_calc_m, _fourier_filtering,
                 _b, _a, _loc_save, _itime_save, _gridded, _tf_phase_nightglow):
     global fft_vzs, att_exp, amplification, phase_shift_z
@@ -724,6 +747,24 @@ def init_worker(_list_of_locations, _fft_vzs, _att_exp, _amplification, _phase_s
     itime_save = _itime_save
     gridded = _gridded
     tf_phase_nightglow = _tf_phase_nightglow
+
+
+def init_worker_daylow(_list_of_locations, _fft_uzs, _att_exp, _amplification, _phase_shift_z,
+                _z_4_28_calc_m, _fac_temperature, _loc_save, _itime_save, _gridded):
+    global fft_vzs, att_exp, amplification, phase_shift_z
+    global z_4_28_calc_m, fac_temperature 
+    global list_of_locations, loc_save, itime_save, gridded
+
+    list_of_locations = _list_of_locations
+    fft_uzs = _fft_uzs
+    att_exp = _att_exp
+    amplification = _amplification
+    phase_shift_z = _phase_shift_z
+    z_4_28_calc_m = _z_4_28_calc_m
+    fac_temperature = _fac_temperature
+    loc_save = _loc_save
+    itime_save = _itime_save
+    gridded = _gridded
 
 
 # =========================================================================================================
@@ -766,16 +807,8 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
         ver_vz = fver_alt * vz_z  # shape: (Nz, Nt)
         ### VERSION WITH SMOOTH GRADIENT 
         dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0) + fdver_alt*vz_z
-        # if test: 
-        #     fig, ax = plt.subplots()
-        #     ax.plot(z_1_27_calc_km, np.gradient(vz_z, z_1_27_calc_m, axis=0)[:,1000])
-        #     ax.plot(z_1_27_calc_km, vz_z[:,1000])
-        #     print(brou)
         ### VERSION OF PL 
         #dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
-        # print(fver_alt)
-        # print(dver_vz_z)
-        # print(brou)
         ### VERSION OF BK 
         #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
         ### TEST 
@@ -784,7 +817,7 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
         dver_z = lfilter(b, a, dver_vz_z, axis=1)
         #dver_z2 = lfilter(b, a, ver_dvz_z, axis=1)
 
-        if test and 1==0:
+        if test:
             gs_kw = dict(width_ratios=[1,0.5])
             figb, (ax3b,ax3c) = plt.subplots(ncols=2, nrows=1, constrained_layout=True, gridspec_kw=gs_kw)
 
@@ -923,6 +956,16 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
 
 
 # =========================================================================================================
+### Function to transform velocity at a specific altitude into VER perturbation 
+def temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature):
+
+    ### Divergence of U * temperature factor 
+    dver_z = fac_temperature[:,None] * np.gradient(uz_z, z_4_28_calc_m, axis=0) 
+
+    return(dver_z)
+
+
+# =========================================================================================================
 ### Function to integrate over line of sight (simple model)
 def integrate_line_of_sight(dver_z, z_calc_m):
     ### For now, the LOS is a simple vertical line 
@@ -933,8 +976,8 @@ def integrate_line_of_sight(dver_z, z_calc_m):
     amp_airglow = np.trapz(dver_z, x=z_calc_m, axis=0) # /np.trapz(f_VER(alts_dayglow), x=alts_dayglow,)
 
     ### Convert to Rayleigh
-    #amp_airglow *= _factor_W_to_Rayleigh(1.27, dir="Radiance_to_Rayleigh")  ### VER in W/m3
-    amp_airglow *= _factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh")  ### VER in ph/s/m3
+    #amp_airglow *= _factor_W_to_Rayleigh(1.27, dir="Radiance_to_Rayleigh")  ### for VER in W/m3
+    amp_airglow *= _factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh")  ### for VER in ph/s/m3
 
     ### Can then be converted into total airglow luminosity by adding the integral of ver(z) 
 
@@ -942,9 +985,9 @@ def integrate_line_of_sight(dver_z, z_calc_m):
 
 
 # =========================================================================================================
-### Wrapper function for calculating airglow at one location (outside of class to be parallelisable)
+### Wrapper function for calculating NIGHTglow at one location (outside of class to be parallelisable)
 # =========================================================================================================
-def airglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification, phase_shift_z,f_VER_1_27, f_dVER_1_27,
+def nightglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification, phase_shift_z,f_VER_1_27, f_dVER_1_27,
                         z_1_27_calc_m, fourier_filtering, b,a, loc_save, itime_save, gridded, tf_phase_nightglow):
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
 
@@ -952,39 +995,74 @@ def airglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification
     #     print(i_en, i_east, i_north)
     
     vz_z, fft_vz_z = propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_shift_z)
-    # if i_en == 3360:
-    #     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
-    #                                         tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering, test=True)
-    # else:
-    #     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
-    #                                         tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
     ###
     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
                                         tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
     
-    amp_airglow = integrate_line_of_sight(dver_z, z_1_27_calc_m)
+    amp_nightglow = integrate_line_of_sight(dver_z, z_1_27_calc_m)
             
     ### Store wavefield info 
     # if gridded:
     #     save_wavefield[i_east, i_north, :,:,0] = vz_z[:,itime_save]    ### Save velocity waveform 
     #     save_wavefield[i_east, i_north, :,:,1] = dver_z[:,itime_save]  ### Save dVER at altitude z 
-    #     save_intensity_dver[i_east, i_north,:] = amp_airglow[itime_save]  ### Save dVER at altitude z 
+    #     save_intensity_dver[i_east, i_north,:] = amp_nightglow[itime_save]  ### Save dVER at altitude z 
 
     ### For specific location, save all times and altitudes.
     ### NOTE: Otherwise very heavy and very slow 
-    if (i_east, i_north) in loc_save:
-        np.save("./results/dver_z_{:d}_{:d}".format(i_east, i_north), dver_z)
-        np.save("./results/vz_z_{:d}_{:d}".format(i_east, i_north), vz_z)
-        np.save("./results/I_1_27_{:d}_{:d}".format(i_east, i_north), amp_airglow)
+    # if (i_east, i_north) in loc_save:
+    #     np.save("./results/dver_z_{:d}_{:d}".format(i_east, i_north), dver_z)
+    #     np.save("./results/vz_z_{:d}_{:d}".format(i_east, i_north), vz_z)
+    #     np.save("./results/I_1_27_{:d}_{:d}".format(i_east, i_north), amp_nightglow)
 
-    return(vz_z[:,itime_save], dver_z[:,itime_save], amp_airglow[itime_save])
+    return(vz_z[:,itime_save], dver_z[:,itime_save], amp_nightglow[itime_save])
 
 
-def worker_func(i):
+
+# =========================================================================================================
+### Wrapper function for calculating DAYglow at one location (outside of class to be parallelisable)
+# =========================================================================================================
+def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification, phase_shift_z, 
+                        z_4_28_calc_m, fac_temperature, loc_save_idx, itime_save, gridded):
+    
+    i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
+
+    # if (i_east, i_north) == loc_save[0]:
+    #     print(i_en, i_east, i_north)
+    
+    uz_z, fft_uz_z = propagate_attenuate(fft_uzs, i_east, i_north, att_exp, amplification, phase_shift_z)
+    ###
+    dver_z = temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature)
+    ### 
+    amp_dayglow = integrate_line_of_sight(dver_z, z_4_28_calc_m)
+            
+    ### Store wavefield info 
+    # if gridded:
+    #     save_wavefield[i_east, i_north, :,:,0] = vz_z[:,itime_save]    ### Save velocity waveform 
+    #     save_wavefield[i_east, i_north, :,:,1] = dver_z[:,itime_save]  ### Save dVER at altitude z 
+    #     save_intensity_dver[i_east, i_north,:] = amp_dayglow[itime_save]  ### Save dVER at altitude z 
+
+    ### For specific location, save all times and altitudes.
+    ### NOTE: Otherwise very heavy and very slow 
+    # if (i_east, i_north) in loc_save:
+    #     np.save("./results/dver_z_{:d}_{:d}".format(i_east, i_north), dver_z)
+    #     np.save("./results/vz_z_{:d}_{:d}".format(i_east, i_north), vz_z)
+    #     np.save("./results/I_1_27_{:d}_{:d}".format(i_east, i_north), amp_dayglow)
+    return(uz_z[:,itime_save], dver_z[:,itime_save], amp_dayglow[itime_save])
+    
+
+
+def worker_func_nightglow(i):
     # location = list_of_locations[i]
-    return airglow_at_location(i, list_of_locations, fft_vzs, att_exp, amplification, 
+    return nightglow_at_location(i, list_of_locations, fft_vzs, att_exp, amplification, 
                                phase_shift_z, f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, 
                                fourier_filtering, b, a, loc_save, itime_save, gridded, tf_phase_nightglow)
+
+
+def worker_func_dayglow(i):
+    # location = list_of_locations[i]
+    return dayglow_at_location(i, list_of_locations, fft_vzs, att_exp, amplification, 
+                               phase_shift_z, z_4_28_calc_m, fac_temperature,
+                               loc_save, itime_save, gridded)
 
 
 # =========================================================================================================
@@ -1016,14 +1094,17 @@ class AirglowSignal:
         file_airglow_kenda     = f'{folder_data}VER_profiles_from_kenda.csv'
         file_attenuation_kenda = f'{folder_data}attenuation_kenda.csv'
         dir_attenuation_GA     = '/staff/marouchka/Documents/ATMOSPHERE/ATTENUATION/Gil_Averbuch_profiles/'
-        use_kenda_data         = False
+        use_kenda_atm          = False
+        use_kenda_att          = True
         
         ### CONSTRUCT INTERPOLATED ATMOSPHERIC MODELS 
-        self._load_atmosphere(file_atmos, file_1_27_airglow, file_4_28_airglow, file_airglow_kenda, use_kenda_data=use_kenda_data)
+        self._load_atmosphere(file_atmos, file_1_27_airglow, file_4_28_airglow, file_airglow_kenda, use_kenda_atm=use_kenda_atm)
 
         ### CONSTRUCT INTERPOLATED ABSPORTION / AMPLIFICATION MODELS 
-        self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(file_attenuation_kenda=file_attenuation_kenda, do_plot=True)
-        # self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(dir_attenuation_GA=dir_attenuation_GA, do_plot=True)
+        if use_kenda_att:
+            self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(file_attenuation_kenda=file_attenuation_kenda, do_plot=False)
+        else:
+            self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(dir_attenuation_GA=dir_attenuation_GA, do_plot=False)
 
         ### Definitions for the calculation of 1_27 micrometer nightglow 
         self.tau = 4460 # s
@@ -1034,6 +1115,11 @@ class AirglowSignal:
         self.dz_1_27_m = np.diff(self.z_1_27_calc_m)[0]
         ### For calculation of cumulated attenuation: 
         self.z_att_km = np.concatenate((np.arange(self.z_1_27_min,0, -self.dz_1_27_m/1e3)[1:][::-1], self.z_1_27_calc_km)) 
+
+        ### Definitions for the calculation of 4_28 micrometer nightglow 
+        self.z_4_28_calc_km = np.linspace(self.z_4_28_min, self.z_4_28_max, self.Nz)  #km 
+        self.z_4_28_calc_m = self.z_4_28_calc_km * 1e3        
+        self.dz_4_28_m = np.diff(self.z_4_28_calc_m)[0]
 
 
     def _factor_photons_watt(self, L, dir="ps_to_W"):
@@ -1078,7 +1164,7 @@ class AirglowSignal:
     
 
     def _load_atmosphere(self, file_atmos, file_1_27_airglow, file_4_28_airglow, file_airglow_kenda,
-                         use_kenda_data=False, gamma_kenda=11./9.):
+                         use_kenda_atm=False, gamma_kenda=11./9.):
 
         atm_profile = pd.read_csv(file_atmos)
         self.f_rho = interpolate.interp1d(atm_profile.altitude/1e3, atm_profile.rho, kind='quadratic', bounds_error=False, fill_value=(atm_profile.rho.min(), atm_profile.rho.max()))
@@ -1154,12 +1240,20 @@ class AirglowSignal:
         ### Read data for 4_32 micromter CO2 volume emission rate
         ### Units: W/m3 with a bandwidth of 0.03 micrometer 
         VER = pd.read_csv(file_4_28_airglow)
-        VER.columns=['VER', 'alt']
-        VER.to_csv(file_4_28_airglow.replace('.csv', '_scaled.csv'), index=False)
+        VER.columns=['VER', 'alt']  ### ALt is in km
+        ### TEST: Convert VER to ph/m3/s using the energy of a photon 
+        ### Ep = hc/lambda 
+        ### Lambda = 4.28 micrometer 
+        if self.unit=="photons":
+            VER.VER *= self._factor_photons_watt(4.28, dir="W_to_ps")
+        # VER.to_csv(file_4_28_airglow.replace('.csv', '_scaled.csv'), index=False)
         self.f_VER_4_28 = interpolate.interp1d(VER.alt, VER.VER, kind='cubic', bounds_error=False, fill_value=(VER.VER.iloc[0], VER.VER.iloc[-1]))
+        self.z_4_28_min = VER.alt.min()
+        self.z_4_28_max = VER.alt.max()
+
 
         ### Use a different type of data 
-        if use_kenda_data:
+        if use_kenda_atm:
             VER_kenda = pd.read_csv(file_airglow_kenda)
 
             self.f_rho = interpolate.interp1d(VER_kenda.z, VER_kenda.rho, kind='quadratic', bounds_error=False, fill_value=(VER_kenda.rho.min(), VER_kenda.rho.max()))
@@ -1179,6 +1273,7 @@ class AirglowSignal:
     def _load_absorption_amplification(self, file_attenuation_kenda=None, dir_attenuation_GA=None, do_plot=False):
 
         if file_attenuation_kenda is not None:
+            print("Using Balthasar Kenda's attenuation data")
             ### Then define a function to go from vz_surface to vz_z (amplification + attenuation)
             atten = pd.read_csv(file_attenuation_kenda, header=[0])
             alts = atten.alt.unique()
@@ -1215,6 +1310,7 @@ class AirglowSignal:
             f_amplification = interpolate.interp1d(alts, amplification, kind='quadratic')
 
         elif dir_attenuation_GA is not None:
+            print("Using Gil Averbuch's attenuation data")
             files_unsorted = [dir_attenuation_GA + f for f in os.listdir(dir_attenuation_GA)]
             freq_unsorted = [float(f.split("Hz.csv")[0]) for f in os.listdir(dir_attenuation_GA)]
 
@@ -1256,10 +1352,10 @@ class AirglowSignal:
 
             ### Calculate amplification from conservation of kinetic energy
             ### and out atmosphere model: 
-            amplification = self.f_rho(0)*self.f_c(0)/ (self.f_rho(alts)*self.f_c(alts))
+            amplification = np.sqrt(self.f_rho(0)*self.f_c(0)/ (self.f_rho(alts)*self.f_c(alts)))
             ### 1D interpolatiom (it doesn't depend on frequency)
             def f_amplification(z):
-                return(self.f_rho(0)*self.f_c(0)/ (self.f_rho(z)*self.f_c(z)))
+                return( np.sqrt(self.f_rho(0)*self.f_c(0)/ (self.f_rho(z)*self.f_c(z))) )
             
 
 
@@ -1291,6 +1387,7 @@ class AirglowSignal:
             # for i in range(0,800,80) :
             #    ax2.plot(freq, amplification[i,:], c=cols(i/799), label = "{:.1f}".format(alts[i])) 
             ax2b.plot(alts, amplification, c="k")
+            ax2b.plot(alts, np.sqrt(self.f_rho(0)*self.f_c(0)/ (self.f_rho(alts)*self.f_c(alts))), c="b")
             i90 = np.argmin(np.abs(alts-90))
             amp90 =  amplification[i90]
             # ax2b.plot(alts, amplification[:,0]/amp90, c="k")
@@ -1336,7 +1433,7 @@ class AirglowSignal:
 
     def calculate_1_27_airglow(self, list_ieast, list_inorth, loc_save_idx=None, loc_save_EN = None, 
                                time_save = None, fourier_filtering=False, 
-                               n_cpus=10, do_parallel=True, tmax=2500):
+                               n_cpus=10, do_parallel=True, tmax=2500, dir_save="./results"):
         
         ### Ensure we have a time series: 
         if self.t_new is None: 
@@ -1346,7 +1443,8 @@ class AirglowSignal:
 
         ### Save vertical profiles at 10 first locations by default
         if loc_save_idx is None and loc_save_EN is None:
-            loc_save_idx = list(zip(list_ieast[:10], list_inorth[:10]))
+            # loc_save_idx = list(zip(list_ieast[:10], list_inorth[:10]))
+            loc_save_idx = list(zip(list_ieast, list_inorth))
         elif loc_save_EN is not None:
             loc_save_idx = []
             for es, ns in loc_save_EN:
@@ -1357,7 +1455,7 @@ class AirglowSignal:
             loc_save_EN = []
             for ies, ins in loc_save_idx:
                 loc_save_EN.append((self.EE[ies,ins], self.NN[ies, ins] ))
-        print(loc_save_idx)
+        print("(East, North) location indices that will be saved: ", loc_save_idx)
 
         ### Save wavefield every 10 timesteps by default
         if time_save is None: 
@@ -1427,12 +1525,12 @@ class AirglowSignal:
             # import time as ptime 
             # t1=ptime.time()
             for i_en in tqdm(list_indices, total=len(list_ieast), disable=False):
-                i_en = 3360
-                # save_wavefield, save_intensity_dver = self.airglow_at_location(i_en, 
+                # i_en = 3360
+                # save_wavefield, save_intensity_dver = self.nightglow_at_location(i_en, 
                 #                                                                 fft_vzs, fourier_filtering, 
                 #                                                                 save_wavefield, save_intensity_dver, 
                 #                                                                 loc_save, itime_save)
-                vz_z_it, dver_z_it, amp_airglow_it = airglow_at_location(i_en, list_of_locations, fft_vzs, self.att_exp, self.amplification, 
+                vz_z_it, dver_z_it, amp_nightglow_it = nightglow_at_location(i_en, list_of_locations, fft_vzs, self.att_exp, self.amplification, 
                                                                           self.phase_shift_z,self.f_VER_1_27,self.f_dVER_1_27,
                                                                         self.z_1_27_calc_m, fourier_filtering, self.b, self.a, 
                                                                         loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow, )
@@ -1440,7 +1538,7 @@ class AirglowSignal:
                     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
                     save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
                     save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
-                    save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save Intensity at altitude z
+                    save_intensity_dver[i_east, i_north,:] = amp_nightglow_it  ### Save Intensity at altitude z
 
             # t2 = ptime.time()
             # print(t2-t1)
@@ -1451,35 +1549,174 @@ class AirglowSignal:
             ### However, fork doesn't work on windows/mac. To get a more flexible but fast parallelisation, 
             ### we need to move to joblib and memory maps. 
             with get_context("fork").Pool(processes=n_cpus,
-                                            initializer=init_worker,
+                                            initializer=init_worker_nightlow,
                                             initargs=(list_of_locations, fft_vzs, self.att_exp, self.amplification, self.phase_shift_z,
                                                     self.f_VER_1_27, self.f_dVER_1_27, self.z_1_27_calc_m, fourier_filtering,
                                                     self.b, self.a, 
                                                     loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow)
                                                 ) as p:
                 
-                results = list(tqdm(p.imap(worker_func, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
+                results = list(tqdm(p.imap(worker_func_nightglow, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
                 t2 = ptime.time()
             print("Time for airglow calculation: {:.1f} s".format(t2-t0))
 
             ### Store wavefields 
-            if self.gridded: 
-                for i_en ,r in enumerate(results):
-                    i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
-                        
-                    vz_z_it = r[0]
-                    dver_z_it = r[1]
-                    amp_airglow_it = r[2]
-                    save_wavefield[i_east, i_north, :,:,0] = vz_z_it         ### Save velocity waveform 
-                    save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at altitude z 
-                    save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save Intensity at altitude z
+            # if self.gridded: 
+            print("Re-aranging gridded wavefield...")
+            for i_en, r in enumerate(tqdm(results, total=len(results), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ) ):
+                i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
+                    
+                vz_z_it = r[0]
+                dver_z_it = r[1]
+                amp_nightglow_it = r[2]
+                save_wavefield[i_east, i_north, :,:,0] = vz_z_it         ### Save velocity waveform at all requested altitudes and times
+                save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at all requested altitudes and times
+                save_intensity_dver[i_east, i_north,:] = amp_nightglow_it  ### Save Intensity at requested times  
 
             
         ### Save the full wavefield, but only at certain times 
-        np.save("./results/dver_t", save_wavefield)
-        np.save("./results/I_t", save_intensity_dver)
+        print("Saving gridded wavefield...")
+        np.save(dir_save + "nightglow_dver_t", save_wavefield)
+        np.save(dir_save + "nightglow_I_t", save_intensity_dver)
+        print("Grid save completed.")
 
 
+    def calculate_4_28_nightglow(self, list_ieast, list_inorth, loc_save_idx=None, loc_save_EN = None,
+                                 time_save = None, 
+                                 n_cpus=10, do_parallel=True, tmax=2500, dir_save="./results"):
+        
+        ### Ensure we have a time series: 
+        if self.t_new is None: 
+            t = self.synthetic_traces_v[0].get_xdata()
+            self.t_new = np.arange(0., max(t.max(), tmax), self.dt)
+            self.Nt = self.t_new.size
+
+        ### Save vertical profiles at 10 first locations by default
+        if loc_save_idx is None and loc_save_EN is None:
+            # loc_save_idx = list(zip(list_ieast[:10], list_inorth[:10]))
+            loc_save_idx = list(zip(list_ieast, list_inorth))
+        elif loc_save_EN is not None:
+            loc_save_idx = []
+            for es, ns in loc_save_EN:
+                idx = np.argmin(np.sqrt((self.NN-ns)**2+(self.EE-es)**2)) 
+                idx = np.unravel_index(idx, self.EE.shape)
+                loc_save_idx.append(idx)
+        elif loc_save_idx is not None:
+            loc_save_EN = []
+            for ies, ins in loc_save_idx:
+                loc_save_EN.append((self.EE[ies,ins], self.NN[ies, ins] ))
+        print("(East, North) location indices that will be saved: ", loc_save_idx)
+
+        ### Save wavefield every 10 timesteps by default
+        if time_save is None: 
+            time_save = self.t_new[::int(self.Nt//10)]
+
+        itime_save = [np.where(abs(self.t_new-tw)<self.dt/2)[0][0] for tw in time_save]
+        save_wavefield = np.zeros((self.Ne, self.Nn, self.Nz, len(time_save),2 ))
+        save_intensity_dver = np.zeros((self.Ne, self.Nn,len(time_save)))
+
+        ### Define frequencies 
+        freqsi = sfft.fftfreq(d=self.dt, n=self.Nt)
+        freqsp = abs(freqsi)
+
+        ### Fourier transform of seismograms 
+        fft_uzs = sfft.fft(self.DIS, axis=2)
+
+        ### Pre-calculate the phase shift corresponding to the delay with altitude 
+        self.phase_shift_z = np.zeros((self.Nz, self.Nt), dtype = np.complex64)
+        ### Integrated travel time from zero to airglow altitudes 
+        self.travel_time = self.dz_4_28_m * np.cumsum(1/self.f_c(self.z_att_km))
+        self.travel_time = self.travel_time[-self.Nz:]
+        for jz, zz in enumerate(self.z_4_28_calc_km):
+            ### Constant propagation velocity og 300 m/s
+            #self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * zz / 0.3)
+
+            ### Integrated propagation velocity from zero to altitude z  
+            self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * self.travel_time[jz] )
+
+        ### Grid of amplification 
+        self.amplification = self.f_amplification(self.z_4_28_calc_km)
+
+        ### Grid of attenuation: OPTION WITHOUT CUMULATIVE SUM 
+        #FFver, ZZver = np.meshgrid(freqsp, self.z_1_27_calc_km)
+        #attenuation = self.f_alpha_2d((ZZver, FFver))
+        ### Exponential of attenuation (supposing Np/km)
+        #self.att_exp = np.exp(-self.z_1_27_calc_km[:,np.newaxis]*attenuation)   ### meter or kilometer ? Cumulative sum or not ? 
+
+        ### NOTE: Cumulative sum works only if we are starting from z=0
+        FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_km)
+        attenuation = self.f_alpha_2d((ZZver2, FFver))
+        att_exp = np.exp(-self.dz_4_28_m*np.cumsum(attenuation, axis=0))   ### Supposes Np/m 
+        self.att_exp = att_exp[-self.Nz:]
+        # fig, ax = plt.subplots() 
+        # for i in range(self.Nz):
+        #     ax.plot(freqsp, self.att_exp[i,:])    
+
+        ### Temperature factor: 
+        # dVER_dayglow = alpha * self.f_VER_4_28(alt)*(self.f_gamma(alt)-1)*self.f_t(alt)*np.gradient(uz)
+        alpha_t = 0.01
+        self.fac_temperature = alpha_t * self.f_VER_4_28(self.z_4_28_calc_km)*\
+                                    (self.f_gamma(self.z_4_28_calc_km)-1)*\
+                                    self.f_t(self.z_4_28_calc_km)
+        
+        ### Prepare the loop 
+        list_of_locations = list(zip(list_ieast, list_inorth))
+        list_indices = range(len(list_of_locations))
+
+        ### SERIAL VERSION OF THE CALCULATION 
+        if not do_parallel: 
+            # import time as ptime 
+            # t1=ptime.time()
+            for i_en in tqdm(list_indices, total=len(list_ieast), disable=False):
+                # i_en = 3360
+                vz_z_it, dver_z_it, amp_dayglow_it = dayglow_at_location(i_en, list_of_locations, fft_uzs, self.att_exp, self.amplification, 
+                                                                          self.phase_shift_z,self.z_4_28_calc_m, self.fac_temperature,
+                                                                          loc_save_idx, itime_save, self.gridded)
+                if self.gridded:
+                    i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
+                    save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
+                    save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
+                    save_intensity_dver[i_east, i_north,:] = amp_dayglow_it  ### Save Intensity at altitude z
+
+            # t2 = ptime.time()
+            # print(t2-t1)
+        ### PARALLEL WITH MULTIPROCESSING (requires all functions defined outside of class)
+        else:
+            t0=ptime.time()
+            ### NOTE: "fork" is much faster than "spawn" as spawn spends time copying array to different workers 
+            ### However, fork doesn't work on windows/mac. To get a more flexible but fast parallelisation, 
+            ### we need to move to joblib and memory maps. 
+            with get_context("fork").Pool(processes=n_cpus,
+                                            initializer=init_worker_dayglow,
+                                            initargs=(list_of_locations, fft_uzs, self.att_exp, self.amplification, self.phase_shift_z,
+                                                    self.z_1_27_calc_m, self.fac_temperature, loc_save_idx, itime_save, self.gridded)
+                                                ) as p:
+                
+                results = list(tqdm(p.imap(worker_func_dayglow, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
+                t2 = ptime.time()
+            print("Time for dayglow calculation: {:.1f} s".format(t2-t0))
+
+            ### Store wavefields 
+            # if self.gridded: 
+            print("Re-aranging gridded dayglow wavefield...")
+            for i_en, r in enumerate(tqdm(results, total=len(results), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ) ):
+                i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
+                    
+                vz_z_it = r[0]
+                dver_z_it = r[1]
+                amp_airglow_it = r[2]
+                save_wavefield[i_east, i_north, :,:,0] = vz_z_it         ### Save velocity waveform at all requested altitudes and times
+                save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at all requested altitudes and times
+                save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save Intensity at requested times  
+
+            
+        ### Save the full wavefield, but only at certain times 
+        print("Saving gridded dayglow wavefield...")
+        np.save(dir_save + "dayglow_dver_t", save_wavefield)
+        np.save(dir_save + "dayglow_I_t", save_intensity_dver)
+        print("Grid save completed.")
+    
+    
     def plot_nightglow_traces(self, loc_plot = None, idx_plot = None, z1=92, z2=112, photons_nightglow=2e4, time_end=2000):
 
         ### Convert east and north coordinate to indices if needed 
@@ -1493,9 +1730,8 @@ class AirglowSignal:
     
         ### Find the right altitude
         alts_airglow = self.z_1_27_calc_km
-        iz1 = np.where( np.abs(alts_airglow-z1) == np.min(np.abs(alts_airglow-z1)))[0][0]
-        iz2 = np.where( np.abs(alts_airglow-z2) == np.min(np.abs(alts_airglow-z2)))[0][0]
-        print(iz1, iz2)
+        iz1 = np.argmin(np.abs(alts_airglow-z1))
+        iz2 = np.argmin(np.abs(alts_airglow-z2))
         ### Get appropriate signals 
         dver_z_loc = np.load("./results/dver_z_{:d}_{:d}.npy".format(i_east, i_north))
         dver_z1 = dver_z_loc[iz1,:]
@@ -1543,19 +1779,40 @@ class AirglowSignal:
         ###
         fig.align_labels()
         fig.tight_layout()
+        # fig.savefig("./Figures/Seismic_to_Airglow.png")
+        
+
+    def plot_dVER_traces(self, loc_plot = None, idx_plot = None, z1=92, z2=112, time_end=2000):
+
+        ### Convert east and north coordinate to indices if needed 
+        if loc_plot is None and idx_plot is None:
+            raise("Requires a couple of coordinates (loc_plot) or a couple of indices (idx_plot).")
+        elif loc_plot is not None:
+            idx = np.argmin(np.sqrt((self.NN-loc_plot[1])**2+(self.EE-loc_plot[0])**2)) 
+            i_east, i_north = np.unravel_index(idx, self.EE.shape)
+        else:
+            i_east, i_north = idx_plot[0], idx_plot[1]
+    
+        ### Recover altitude 
+        alts_airglow = self.z_1_27_calc_km
+
+        ### Calculate all intensities 
+        dver_z_loc = np.load("./results/dver_z_{:d}_{:d}.npy".format(i_east, i_north))
+        maxv = np.max(np.abs(dver_z_loc))
+        dz = np.diff(alts_airglow)[0]
+        I = integrate.cumulative_trapezoid(dver_z_loc, alts_airglow*1e3 , axis=0, initial=0)
+        # I = np.cumsum(dver_z_loc, axis=0)*dz
+        maxI = np.max(np.abs(I))
 
         ####################################################################################
         ### PLOT VER(z) at all altitudes 
         fig2, (axm,axi) = plt.subplots(1,2,figsize=(10,6) )
-        maxv = np.max(np.abs(dver_z_loc))
-        dz = np.diff(alts_airglow)[0]
-        I = np.cumsum(dver_z_loc, axis=0)*dz
-        maxI = np.max(np.abs(I))
+        norm = dz*5 ### Makes the waveform a little taller than one altitude separation
         for iz, z in enumerate(alts_airglow):
-            axm.plot(self.t_new, dver_z_loc[iz,:]/maxv*dz*5 + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
-            axi.plot(self.t_new, I[iz,:]/maxI*dz*5 + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
+            axm.plot(self.t_new, dver_z_loc[iz,:]/maxv*norm + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
+            axi.plot(self.t_new, I[iz,:]/maxI*norm + z, c="k", lw=1, label="z={:.1f} km".format(alts_airglow[iz]))
         
-        axi.plot(self.t_new, I[iz,:]/maxI*dz*5 + z, c="r", lw=2, label="z={:.1f} km".format(alts_airglow[iz]))
+        axi.plot(self.t_new, I[iz,:]/maxI*norm + z, c="r", lw=2, label="z={:.1f} km".format(alts_airglow[iz]))
         
         axm.set_title("Perturbation of VER")
         axi.set_title("Integrated intensity")
@@ -1571,9 +1828,9 @@ class AirglowSignal:
         ###
         fig2.align_labels()
         fig2.tight_layout()
-        fig2.savefig("./Figures/VER_z.png")
-        
-
+        # fig2.savefig("./Figures/VER_z.png")
+    
+    
     def plot_arrival_times(self, ax, t_p, t_s, t_rs, atmo_time=0, c="w"):
         ### atmo_time: Time for propagation towards airglow layer 
 
@@ -2003,6 +2260,157 @@ class AirglowSignal:
             axw.set_xlim(freqs.min(), 1)#freqs.max())
             figw.tight_layout()
 
+
+
+# =========================================================================================================
+### New AIRGLOW SCALER 
+# =========================================================================================================
+def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True):
+    '''
+    We calculate airglow signals for a series of receiver locations and source depths. 
+    '''
+
+    ### First, define the grid of locations. 
+    gridded       = True
+    min_grid_dist = 0e3
+    max_grid_dist = 5000e3 # 4000e3
+    delta_dist    = 50e3 
+    Np = 1+ int(2*max_grid_dist/delta_dist)
+    north_shifts  = np.linspace(-max_grid_dist, max_grid_dist, Np, endpoint=True)[::10]
+    east_shifts   = np.linspace(-max_grid_dist, max_grid_dist, Np, endpoint=True)[::10]
+    
+    ### Source depths 
+    delta_depth = 5e3
+    depths = np.arange(5e3, 50e3+delta_depth, delta_depth)
+
+    ### Option for Pyrocko 
+    opt_synthetics = dict(
+        ### Options for source 
+        mw = mw,               ### if none: We only get the Green's function
+        depth = depths[5],     ### Only one depth
+        strike = strike,       ### Default mechanism 
+        dip =  dip, 
+        rake = rake,
+        stf_type = None,       ### Dirac source 
+        #stf_type = 'triangle', 
+        # stf_type = 'sinus', 
+        #effective_duration = 25.,
+        ###  
+        ### Options for store
+        base_folder='/projects/restricted/infrasound/data/infrasound/2023_Venus_inversion/',
+        ### Old option, single store 
+        #store_id = 'GF_venus_Cold100_qssp',
+        #store_id = 'GF_venus_Cold100_qssp_grid',
+        ### Give store names, and min and max valid distance 
+        store_ids_dists = [('GF_venus_Cold100_qssp_grid',0e3,500e3),('GF_venus_Cold100_qssp_grid_mid',500e3,8000e3)],
+        ###
+        ### Options for grid 
+        north_shifts = north_shifts, 
+        east_shifts = east_shifts,
+        gridded=gridded
+    )
+
+    ### INITIALIZE SEISMOGRAM CLASS 
+    ### we build seismograms over grid
+    ### 
+    SEISMO = Seismograms(**opt_synthetics)
+    print("Total grid size: ", SEISMO.NN.size)
+
+    ### OPTIONAL: Plot to check 
+    ns, es       = 1000e3, 0e3
+    ### Plot one of the waveforms for check
+    # fig1 = SEISMO.plot_traces(ns, es, do_interpolate=True)
+
+    ### Store results inside a regular grid. 
+    dt_airglow = 4
+    SEISMO.arrange_interpolate_synthetics(tmax=3000, dt=dt_airglow)
+
+    ### OPTIIONAL: Plot velocity wavefront at the surface for sanity check 
+    # fig2 = SEISMO.plot_wavefront()
+
+    ### Now, we will calculate the AIRGLOW at every loc of the grid
+    ### We first load the airglow class
+    AIRGLOW = AirglowSignal(SEISMO)
+
+    ### Now we compute the AIRGLOW at all locations and timesteps. 
+    ### NOTE : This can be quite heavy ! 
+    ### List of all north and east indices:
+    dir_save="./results_detectability/"
+    if not os.path.exists(dir_save):
+        os.makedirs(dir_save)
+    list_inorth, list_ieast = AIRGLOW.iNN, AIRGLOW.iEE
+    AIRGLOW.calculate_1_27_airglow(list_ieast, list_inorth, 
+                                   do_parallel=True, 
+                                   fourier_filtering=False,   ### Use time filtering 
+                                   dir_save = dir_save,
+                                   time_save = AIRGLOW.t_new) ### Save all timesteps 
+
+    ### Now, velocity and dver as a function of z, t are stored in 
+    ### "./results_detectability/dver_t.npy"
+    ### Integrated intensity is stored in 
+    ### "./results_detectability/I_t.npy"
+
+    I_t = np.load(dir_save + "I_t.npy")
+    alts_airglow = AIRGLOW.z_1_27_calc_km
+    #I_background_nightglow = np.trapz(AIRGLOW.f_VER_1_27(alts_airglow), alts_airglow*1e3 )*AIRGLOW._factor_W_to_Rayleigh(1.27, dir="Radiance_to_Rayleigh")     ### if VER in W/m3
+    I_background_nightglow = np.trapz(AIRGLOW.f_VER_1_27(alts_airglow), alts_airglow*1e3 )*AIRGLOW._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh") ### if VER is in ph/s/m3
+
+
+    ### Now, we make some frequency bins 
+    freq_bins = np.logspace(np.log10(1e-3), np.log10(5e-1), 5)
+    f_targets = []
+    for ibin, (binleft, binright) in enumerate(zip(freq_bins[:-1], freq_bins[1:])):
+        if ibin == 0:
+            binleft = None
+        if ibin == len(freq_bins)-2:
+            binright = None
+        f_targets += [[binleft, binright]]
+
+
+    scaling_airglow = pd.DataFrame()
+    ### We loop over locations and store the max amplitude in a dataframe: 
+    for f1, f2 in tqdm(f_targets, disable=True):
+
+        waveform_nightglow_filt = butter_filter(I_t, 1/dt_airglow, f1,f2, order=4, axis=2)
+        perturb_nightglow_filt = waveform_nightglow_filt/I_background_nightglow
+
+        # fig, ax = plt.subplots() 
+        # ax.plot(I_t[5,5,:])
+        # ax.plot(waveform_nightglow[5,5,:])
+
+        for (ies, ins) in zip(AIRGLOW.iEE.ravel(), AIRGLOW.iNN.ravel()):
+            es, ns = AIRGLOW.EE[ies, ins], AIRGLOW.NN[ies,ins]
+            loc_dict = dict(ns=ns, es=es, 
+                            f1=f1 if f1 is not None else 0, 
+                            f2=f2 if f2 is not None else 1., 
+                            nightglow=abs(perturb_nightglow_filt[ies, ins,:]).max())
+            # dayglow=abs(waveform_dayglow).max()
+            scaling_airglow = pd.concat([scaling_airglow, pd.DataFrame([loc_dict])])
+
+    # print(scaling_airglow)
+    ### Calculate statistics 
+    scaling_nightglow_plot = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].median().reset_index()
+    scaling_nightglow_plot['nightglow_q25'] = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].quantile(q=0.25).reset_index()['nightglow']
+    scaling_nightglow_plot['nightglow_q75'] = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].quantile(q=0.75).reset_index()['nightglow']
+
+    if do_plot:
+        fig, ax = plt.subplots()
+
+        # ax.plot(scaling_airglow_plot.f1, scaling_airglow_plot.dayglow, color='tab:blue', label='dayglow')
+        # ax.fill_between(scaling_airglow_plot.f1, scaling_airglow_plot.dayglow_q25, scaling_airglow_plot.dayglow_q75, color='tab:blue', alpha=0.3)
+
+        fmean = (scaling_nightglow_plot.f2 + scaling_nightglow_plot.f1)/2
+        ax.plot(fmean, scaling_nightglow_plot.nightglow, 
+                color='tab:orange', label='nightglow', marker="s")
+        ax.fill_between(fmean, 
+                        scaling_nightglow_plot.nightglow_q25, scaling_nightglow_plot.nightglow_q75,
+                        color='tab:orange', alpha=0.3)
+
+        ax.legend(frameon=False)
+        ax.set_yscale('log')
+        ax.set_xscale('log')
+        ax.set_xlabel("Frequency / [$Hz$]")
+        ax.set_ylabel("Airglow Intensity perturbation")
 
 # =========================================================================================================
 ### QUENTIN's functions 
