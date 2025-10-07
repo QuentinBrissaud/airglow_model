@@ -749,9 +749,9 @@ def init_worker_nightlow(_list_of_locations, _fft_vzs, _att_exp, _amplification,
     tf_phase_nightglow = _tf_phase_nightglow
 
 
-def init_worker_daylow(_list_of_locations, _fft_uzs, _att_exp, _amplification, _phase_shift_z,
+def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, _phase_shift_z,
                 _z_4_28_calc_m, _fac_temperature, _loc_save, _itime_save, _gridded):
-    global fft_vzs, att_exp, amplification, phase_shift_z
+    global fft_uzs, att_exp, amplification, phase_shift_z
     global z_4_28_calc_m, fac_temperature 
     global list_of_locations, loc_save, itime_save, gridded
 
@@ -967,7 +967,7 @@ def temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature):
 
 # =========================================================================================================
 ### Function to integrate over line of sight (simple model)
-def integrate_line_of_sight(dver_z, z_calc_m):
+def integrate_line_of_sight(dver_z, z_calc_m, wavelength):
     ### For now, the LOS is a simple vertical line 
     #amp_dayglow = np.trapz((dVER_ad+1*dVER_tr), x=alts_dayglow, axis=1)/np.trapz(f_VER_dayglow(alts_dayglow), x=alts_dayglow,)
 
@@ -976,8 +976,8 @@ def integrate_line_of_sight(dver_z, z_calc_m):
     amp_airglow = np.trapz(dver_z, x=z_calc_m, axis=0) # /np.trapz(f_VER(alts_dayglow), x=alts_dayglow,)
 
     ### Convert to Rayleigh
-    #amp_airglow *= _factor_W_to_Rayleigh(1.27, dir="Radiance_to_Rayleigh")  ### for VER in W/m3
-    amp_airglow *= _factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh")  ### for VER in ph/s/m3
+    #amp_airglow *= _factor_W_to_Rayleigh(wavelength, dir="Radiance_to_Rayleigh")  ### for VER in W/m3
+    amp_airglow *= _factor_W_to_Rayleigh(wavelength, dir="phRadiance_to_Rayleigh")  ### for VER in ph/s/m3
 
     ### Can then be converted into total airglow luminosity by adding the integral of ver(z) 
 
@@ -999,7 +999,7 @@ def nightglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplificati
     dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
                                         tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
     
-    amp_nightglow = integrate_line_of_sight(dver_z, z_1_27_calc_m)
+    amp_nightglow = integrate_line_of_sight(dver_z, z_1_27_calc_m, 1.27)
             
     ### Store wavefield info 
     # if gridded:
@@ -1033,7 +1033,7 @@ def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification
     ###
     dver_z = temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature)
     ### 
-    amp_dayglow = integrate_line_of_sight(dver_z, z_4_28_calc_m)
+    amp_dayglow = integrate_line_of_sight(dver_z, z_4_28_calc_m, 4.28)
             
     ### Store wavefield info 
     # if gridded:
@@ -1060,7 +1060,7 @@ def worker_func_nightglow(i):
 
 def worker_func_dayglow(i):
     # location = list_of_locations[i]
-    return dayglow_at_location(i, list_of_locations, fft_vzs, att_exp, amplification, 
+    return dayglow_at_location(i, list_of_locations, fft_uzs, att_exp, amplification, 
                                phase_shift_z, z_4_28_calc_m, fac_temperature,
                                loc_save, itime_save, gridded)
 
@@ -1114,12 +1114,14 @@ class AirglowSignal:
         self.z_1_27_calc_m = self.z_1_27_calc_km * 1e3        
         self.dz_1_27_m = np.diff(self.z_1_27_calc_m)[0]
         ### For calculation of cumulated attenuation: 
-        self.z_att_km = np.concatenate((np.arange(self.z_1_27_min,0, -self.dz_1_27_m/1e3)[1:][::-1], self.z_1_27_calc_km)) 
+        self.z_att_1_27_km = np.concatenate((np.arange(self.z_1_27_min,0, -self.dz_1_27_m/1e3)[1:][::-1], self.z_1_27_calc_km)) 
 
         ### Definitions for the calculation of 4_28 micrometer nightglow 
         self.z_4_28_calc_km = np.linspace(self.z_4_28_min, self.z_4_28_max, self.Nz)  #km 
         self.z_4_28_calc_m = self.z_4_28_calc_km * 1e3        
         self.dz_4_28_m = np.diff(self.z_4_28_calc_m)[0]
+        self.z_att_4_28_km = np.concatenate((np.arange(self.z_4_28_min,0, -self.dz_4_28_m/1e3)[1:][::-1], self.z_4_28_calc_km)) 
+        self.alpha_t = 0.01                                   ### VERY IMPORTANT: 1% sensitivity to temperature
 
 
     def _factor_photons_watt(self, L, dir="ps_to_W"):
@@ -1475,7 +1477,7 @@ class AirglowSignal:
         ### Pre-calculate the phase shift corresponding to the delay with altitude 
         self.phase_shift_z = np.zeros((self.Nz, self.Nt), dtype = np.complex64)
         ### Integrated travel time from zero to airglow altitudes 
-        self.travel_time = self.dz_1_27_m * np.cumsum(1/self.f_c(self.z_att_km))
+        self.travel_time = self.dz_1_27_m * np.cumsum(1/self.f_c(self.z_att_1_27_km))
         self.travel_time = self.travel_time[-self.Nz:]
         for jz, zz in enumerate(self.z_1_27_calc_km):
             ### Constant propagation velocity og 300 m/s
@@ -1508,7 +1510,7 @@ class AirglowSignal:
         #self.att_exp = np.exp(-self.z_1_27_calc_km[:,np.newaxis]*attenuation)   ### meter or kilometer ? Cumulative sum or not ? 
 
         ### NOTE: Cumulative sum works only if we are starting from z=0
-        FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_km)
+        FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_1_27_km)
         attenuation = self.f_alpha_2d((ZZver2, FFver))
         att_exp = np.exp(-self.dz_1_27_m*np.cumsum(attenuation, axis=0))   ### Supposes Np/m 
         self.att_exp = att_exp[-self.Nz:]
@@ -1581,7 +1583,7 @@ class AirglowSignal:
         print("Grid save completed.")
 
 
-    def calculate_4_28_nightglow(self, list_ieast, list_inorth, loc_save_idx=None, loc_save_EN = None,
+    def calculate_4_28_airglow(self, list_ieast, list_inorth, loc_save_idx=None, loc_save_EN = None,
                                  time_save = None, 
                                  n_cpus=10, do_parallel=True, tmax=2500, dir_save="./results"):
         
@@ -1625,7 +1627,7 @@ class AirglowSignal:
         ### Pre-calculate the phase shift corresponding to the delay with altitude 
         self.phase_shift_z = np.zeros((self.Nz, self.Nt), dtype = np.complex64)
         ### Integrated travel time from zero to airglow altitudes 
-        self.travel_time = self.dz_4_28_m * np.cumsum(1/self.f_c(self.z_att_km))
+        self.travel_time = self.dz_4_28_m * np.cumsum(1/self.f_c(self.z_att_4_28_km))
         self.travel_time = self.travel_time[-self.Nz:]
         for jz, zz in enumerate(self.z_4_28_calc_km):
             ### Constant propagation velocity og 300 m/s
@@ -1644,7 +1646,7 @@ class AirglowSignal:
         #self.att_exp = np.exp(-self.z_1_27_calc_km[:,np.newaxis]*attenuation)   ### meter or kilometer ? Cumulative sum or not ? 
 
         ### NOTE: Cumulative sum works only if we are starting from z=0
-        FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_km)
+        FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_4_28_km)
         attenuation = self.f_alpha_2d((ZZver2, FFver))
         att_exp = np.exp(-self.dz_4_28_m*np.cumsum(attenuation, axis=0))   ### Supposes Np/m 
         self.att_exp = att_exp[-self.Nz:]
@@ -1653,9 +1655,8 @@ class AirglowSignal:
         #     ax.plot(freqsp, self.att_exp[i,:])    
 
         ### Temperature factor: 
-        # dVER_dayglow = alpha * self.f_VER_4_28(alt)*(self.f_gamma(alt)-1)*self.f_t(alt)*np.gradient(uz)
-        alpha_t = 0.01
-        self.fac_temperature = alpha_t * self.f_VER_4_28(self.z_4_28_calc_km)*\
+        # dVER_dayglow = self.alpha * self.f_VER_4_28(alt)*(self.f_gamma(alt)-1)*self.f_t(alt)*np.gradient(uz)
+        self.fac_temperature = self.alpha_t * self.f_VER_4_28(self.z_4_28_calc_km)*\
                                     (self.f_gamma(self.z_4_28_calc_km)-1)*\
                                     self.f_t(self.z_4_28_calc_km)
         
@@ -1666,20 +1667,21 @@ class AirglowSignal:
         ### SERIAL VERSION OF THE CALCULATION 
         if not do_parallel: 
             # import time as ptime 
-            # t1=ptime.time()
+            t0=ptime.time()
             for i_en in tqdm(list_indices, total=len(list_ieast), disable=False):
                 # i_en = 3360
-                vz_z_it, dver_z_it, amp_dayglow_it = dayglow_at_location(i_en, list_of_locations, fft_uzs, self.att_exp, self.amplification, 
+                uz_z_it, dver_z_it, amp_dayglow_it = dayglow_at_location(i_en, list_of_locations, fft_uzs, self.att_exp, self.amplification, 
                                                                           self.phase_shift_z,self.z_4_28_calc_m, self.fac_temperature,
                                                                           loc_save_idx, itime_save, self.gridded)
-                if self.gridded:
-                    i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
-                    save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
-                    save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
-                    save_intensity_dver[i_east, i_north,:] = amp_dayglow_it  ### Save Intensity at altitude z
+                
+                i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
+                save_wavefield[i_east, i_north, :,:,0] = uz_z_it    ### Save dispalcement waveform 
+                save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
+                save_intensity_dver[i_east, i_north,:] = amp_dayglow_it  ### Save Intensity at altitude z
 
-            # t2 = ptime.time()
-            # print(t2-t1)
+            t2 = ptime.time()
+            print("Time for dayglow calculation: {:.1f} s".format(t2-t0))
+
         ### PARALLEL WITH MULTIPROCESSING (requires all functions defined outside of class)
         else:
             t0=ptime.time()
@@ -1689,7 +1691,7 @@ class AirglowSignal:
             with get_context("fork").Pool(processes=n_cpus,
                                             initializer=init_worker_dayglow,
                                             initargs=(list_of_locations, fft_uzs, self.att_exp, self.amplification, self.phase_shift_z,
-                                                    self.z_1_27_calc_m, self.fac_temperature, loc_save_idx, itime_save, self.gridded)
+                                                    self.z_4_28_calc_m, self.fac_temperature, loc_save_idx, itime_save, self.gridded)
                                                 ) as p:
                 
                 results = list(tqdm(p.imap(worker_func_dayglow, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
@@ -1702,10 +1704,10 @@ class AirglowSignal:
             for i_en, r in enumerate(tqdm(results, total=len(results), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ) ):
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
                     
-                vz_z_it = r[0]
+                uz_z_it = r[0]
                 dver_z_it = r[1]
                 amp_airglow_it = r[2]
-                save_wavefield[i_east, i_north, :,:,0] = vz_z_it         ### Save velocity waveform at all requested altitudes and times
+                save_wavefield[i_east, i_north, :,:,0] = uz_z_it         ### Save displacement waveform at all requested altitudes and times
                 save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at all requested altitudes and times
                 save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save Intensity at requested times  
 
@@ -1889,7 +1891,7 @@ class AirglowSignal:
         rr = np.sqrt(self.EE[i_east,i_north]**2 + self.NN[i_east,i_north]**2)
         ### Calculate theoretical arrival times
         t_p, t_s, t_rs = theoretical_arrival_times(rr,self.depth)
-        air_travel_time = self.dz_1_27_m * np.cumsum(1/self.f_c(self.z_att_km))
+        air_travel_time = self.dz_1_27_m * np.cumsum(1/self.f_c(self.z_att_1_27_km))
         air_travel_time = air_travel_time[-self.Nz:]
 
         #######################################################
@@ -2344,16 +2346,25 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
                                    fourier_filtering=False,   ### Use time filtering 
                                    dir_save = dir_save,
                                    time_save = AIRGLOW.t_new) ### Save all timesteps 
+    ### Calculation of the Dayglow
+    AIRGLOW.calculate_4_28_airglow(list_ieast, list_inorth, 
+                                   do_parallel=True, 
+                                   dir_save=dir_save, 
+                                   time_save = AIRGLOW.t_new) ### Save all timesteps 
 
     ### Now, velocity and dver as a function of z, t are stored in 
-    ### "./results_detectability/dver_t.npy"
+    ### "./results_detectability/nightglow_dver_t.npy"
+    ### "./results_detectability/dayglow_dver_t.npy"
     ### Integrated intensity is stored in 
-    ### "./results_detectability/I_t.npy"
+    ### "./results_detectability/nightglow_I_t.npy"
+    ### "./results_detectability/dayglow_I_t.npy"
 
-    I_t = np.load(dir_save + "I_t.npy")
-    alts_airglow = AIRGLOW.z_1_27_calc_km
-    #I_background_nightglow = np.trapz(AIRGLOW.f_VER_1_27(alts_airglow), alts_airglow*1e3 )*AIRGLOW._factor_W_to_Rayleigh(1.27, dir="Radiance_to_Rayleigh")     ### if VER in W/m3
-    I_background_nightglow = np.trapz(AIRGLOW.f_VER_1_27(alts_airglow), alts_airglow*1e3 )*AIRGLOW._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh") ### if VER is in ph/s/m3
+    I_nightglow = np.load(dir_save + "nightglow_I_t.npy")
+    alts_nightglow = AIRGLOW.z_1_27_calc_km
+    I_background_nightglow = integrate_line_of_sight(AIRGLOW.f_VER_1_27(alts_nightglow), alts_nightglow*1e3, 1.27)    ### z needs to be in meter for integration 
+    I_dayglow = np.load(dir_save + "dayglow_I_t.npy")
+    alts_dayglow = AIRGLOW.z_4_28_calc_km
+    I_background_dayglow = integrate_line_of_sight(AIRGLOW.f_VER_4_28(alts_dayglow), alts_dayglow*1e3, 4.28)    ### z needs to be in meter for integration 
 
 
     ### Now, we make some frequency bins 
@@ -2371,9 +2382,12 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
     ### We loop over locations and store the max amplitude in a dataframe: 
     for f1, f2 in tqdm(f_targets, disable=True):
 
-        waveform_nightglow_filt = butter_filter(I_t, 1/dt_airglow, f1,f2, order=4, axis=2)
+        waveform_nightglow_filt = butter_filter(I_nightglow, 1/dt_airglow, f1,f2, order=4, axis=2)
         perturb_nightglow_filt = waveform_nightglow_filt/I_background_nightglow
 
+        waveform_dayglow_filt = butter_filter(I_dayglow, 1/dt_airglow, f1,f2, order=4, axis=2)
+        perturb_dayglow_filt = waveform_dayglow_filt/I_background_dayglow
+        
         # fig, ax = plt.subplots() 
         # ax.plot(I_t[5,5,:])
         # ax.plot(waveform_nightglow[5,5,:])
@@ -2383,7 +2397,8 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
             loc_dict = dict(ns=ns, es=es, 
                             f1=f1 if f1 is not None else 0, 
                             f2=f2 if f2 is not None else 1., 
-                            nightglow=abs(perturb_nightglow_filt[ies, ins,:]).max())
+                            nightglow=abs(perturb_nightglow_filt[ies, ins,:]).max(),
+                            dayglow=abs(perturb_dayglow_filt[ies, ins,:]).max())
             # dayglow=abs(waveform_dayglow).max()
             scaling_airglow = pd.concat([scaling_airglow, pd.DataFrame([loc_dict])])
 
@@ -2392,6 +2407,10 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
     scaling_nightglow_plot = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].median().reset_index()
     scaling_nightglow_plot['nightglow_q25'] = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].quantile(q=0.25).reset_index()['nightglow']
     scaling_nightglow_plot['nightglow_q75'] = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].quantile(q=0.75).reset_index()['nightglow']
+    ###
+    scaling_dayglow_plot = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].median().reset_index()
+    scaling_dayglow_plot['dayglow_q25'] = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].quantile(q=0.25).reset_index()['dayglow']
+    scaling_dayglow_plot['dayglow_q75'] = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].quantile(q=0.75).reset_index()['dayglow']
 
     if do_plot:
         fig, ax = plt.subplots()
@@ -2401,10 +2420,15 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
 
         fmean = (scaling_nightglow_plot.f2 + scaling_nightglow_plot.f1)/2
         ax.plot(fmean, scaling_nightglow_plot.nightglow, 
-                color='tab:orange', label='nightglow', marker="s")
+                color='forestgreen', marker="s", label="1.27$\mu m$ Nightglow")
         ax.fill_between(fmean, 
                         scaling_nightglow_plot.nightglow_q25, scaling_nightglow_plot.nightglow_q75,
-                        color='tab:orange', alpha=0.3)
+                        color='forestgreen', alpha=0.3)
+        ax.plot(fmean, scaling_dayglow_plot.dayglow, 
+                color='orangered', marker="s", label=r"4.28$\mu m$ Dayglow")
+        ax.fill_between(fmean, 
+                        scaling_dayglow_plot.dayglow_q25, scaling_dayglow_plot.dayglow_q75,
+                        color='orangered', alpha=0.3)
 
         ax.legend(frameon=False)
         ax.set_yscale('log')

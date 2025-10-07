@@ -3,3 +3,5 @@ __pycache__/
 .ipynb*
 results_detectability/
 results_detectability/
+*.pyc
+
