@@ -364,6 +364,8 @@ amplification= None
 phase_shift_z = None
 f_VER_1_27 = None
 f_dVER_1_27 = None
+f_VER_4_28  = None
+f_dVER_4_28 = None
 z_1_27_calc_m = None
 z_4_28_calc_m = None
 fac_temperature = None 
@@ -750,9 +752,9 @@ def init_worker_nightlow(_list_of_locations, _fft_vzs, _att_exp, _amplification,
 
 
 def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, _phase_shift_z,
-                _z_4_28_calc_m, _fac_temperature, _loc_save, _itime_save, _gridded):
+                _z_4_28_calc_m, _fac_temperature, _f_VER_4_28, _loc_save, _itime_save, _gridded):
     global fft_uzs, att_exp, amplification, phase_shift_z
-    global z_4_28_calc_m, fac_temperature 
+    global z_4_28_calc_m, fac_temperature, f_VER_4_28
     global list_of_locations, loc_save, itime_save, gridded
 
     list_of_locations = _list_of_locations
@@ -761,6 +763,7 @@ def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, 
     amplification = _amplification
     phase_shift_z = _phase_shift_z
     z_4_28_calc_m = _z_4_28_calc_m
+    f_VER_4_28 = _f_VER_4_28
     fac_temperature = _fac_temperature
     loc_save = _loc_save
     itime_save = _itime_save
@@ -961,6 +964,8 @@ def temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature):
 
     ### Divergence of U * temperature factor 
     dver_z = fac_temperature[:,None] * np.gradient(uz_z, z_4_28_calc_m, axis=0) 
+    ### Tet with P.Y. F. expression (here uz_z is actually v)
+    # dver_z = fac_temperature[:,None] * uz_z 
 
     return(dver_z)
 
@@ -1017,12 +1022,11 @@ def nightglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplificati
     return(vz_z[:,itime_save], dver_z[:,itime_save], amp_nightglow[itime_save])
 
 
-
 # =========================================================================================================
 ### Wrapper function for calculating DAYglow at one location (outside of class to be parallelisable)
 # =========================================================================================================
 def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification, phase_shift_z, 
-                        z_4_28_calc_m, fac_temperature, loc_save_idx, itime_save, gridded):
+                        z_4_28_calc_m, fac_temperature, f_VER_4_28, loc_save_idx, itime_save, gridded):
     
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
 
@@ -1032,6 +1036,9 @@ def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification
     uz_z, fft_uz_z = propagate_attenuate(fft_uzs, i_east, i_north, att_exp, amplification, phase_shift_z)
     ###
     dver_z = temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature)
+    ### With advection of VER term (BK):
+    ad_ver = uz_z * np.gradient(f_VER_4_28(z_4_28_calc_m*1e3), z_4_28_calc_m)[:,None]
+    dver_z += ad_ver
     ### 
     amp_dayglow = integrate_line_of_sight(dver_z, z_4_28_calc_m, 4.28)
             
@@ -1061,7 +1068,7 @@ def worker_func_nightglow(i):
 def worker_func_dayglow(i):
     # location = list_of_locations[i]
     return dayglow_at_location(i, list_of_locations, fft_uzs, att_exp, amplification, 
-                               phase_shift_z, z_4_28_calc_m, fac_temperature,
+                               phase_shift_z, z_4_28_calc_m, fac_temperature, f_VER_4_28, 
                                loc_save, itime_save, gridded)
 
 
@@ -1250,6 +1257,7 @@ class AirglowSignal:
             VER.VER *= self._factor_photons_watt(4.28, dir="W_to_ps")
         # VER.to_csv(file_4_28_airglow.replace('.csv', '_scaled.csv'), index=False)
         self.f_VER_4_28 = interpolate.interp1d(VER.alt, VER.VER, kind='cubic', bounds_error=False, fill_value=(VER.VER.iloc[0], VER.VER.iloc[-1]))
+
         self.z_4_28_min = VER.alt.min()
         self.z_4_28_max = VER.alt.max()
 
@@ -1623,6 +1631,7 @@ class AirglowSignal:
 
         ### Fourier transform of seismograms 
         fft_uzs = sfft.fft(self.DIS, axis=2)
+        fft_vzs = sfft.fft(self.VEL, axis=2)
 
         ### Pre-calculate the phase shift corresponding to the delay with altitude 
         self.phase_shift_z = np.zeros((self.Nz, self.Nt), dtype = np.complex64)
@@ -1659,6 +1668,10 @@ class AirglowSignal:
         self.fac_temperature = self.alpha_t * self.f_VER_4_28(self.z_4_28_calc_km)*\
                                     (self.f_gamma(self.z_4_28_calc_km)-1)*\
                                     self.f_t(self.z_4_28_calc_km)
+        ### Test with P.Y. F. expression
+        # self.fac_temperature = self.alpha_t * self.f_VER_4_28(self.z_4_28_calc_km)*\
+        #                             (self.f_gamma(self.z_4_28_calc_km)-1)*\
+        #                             self.f_t(self.z_4_28_calc_km) * 1/self.f_c(self.z_4_28_calc_km)
         
         ### Prepare the loop 
         list_of_locations = list(zip(list_ieast, list_inorth))
@@ -1671,7 +1684,7 @@ class AirglowSignal:
             for i_en in tqdm(list_indices, total=len(list_ieast), disable=False):
                 # i_en = 3360
                 uz_z_it, dver_z_it, amp_dayglow_it = dayglow_at_location(i_en, list_of_locations, fft_uzs, self.att_exp, self.amplification, 
-                                                                          self.phase_shift_z,self.z_4_28_calc_m, self.fac_temperature,
+                                                                          self.phase_shift_z,self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, 
                                                                           loc_save_idx, itime_save, self.gridded)
                 
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
@@ -1691,7 +1704,7 @@ class AirglowSignal:
             with get_context("fork").Pool(processes=n_cpus,
                                             initializer=init_worker_dayglow,
                                             initargs=(list_of_locations, fft_uzs, self.att_exp, self.amplification, self.phase_shift_z,
-                                                    self.z_4_28_calc_m, self.fac_temperature, loc_save_idx, itime_save, self.gridded)
+                                                    self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, loc_save_idx, itime_save, self.gridded)
                                                 ) as p:
                 
                 results = list(tqdm(p.imap(worker_func_dayglow, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
@@ -2420,7 +2433,7 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
 
         fmean = (scaling_nightglow_plot.f2 + scaling_nightglow_plot.f1)/2
         ax.plot(fmean, scaling_nightglow_plot.nightglow, 
-                color='forestgreen', marker="s", label="1.27$\mu m$ Nightglow")
+                color='forestgreen', marker="s", label=r"1.27$\mu m$ Nightglow")
         ax.fill_between(fmean, 
                         scaling_nightglow_plot.nightglow_q25, scaling_nightglow_plot.nightglow_q75,
                         color='forestgreen', alpha=0.3)
@@ -2435,6 +2448,7 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
         ax.set_xscale('log')
         ax.set_xlabel("Frequency / [$Hz$]")
         ax.set_ylabel("Airglow Intensity perturbation")
+        fig.savefig(dir_save + "Airglow_scaler.png", dpi=300)
 
 # =========================================================================================================
 ### QUENTIN's functions 
