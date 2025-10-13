@@ -6,6 +6,7 @@ import sys
 from scipy import interpolate, integrate
 from scipy import signal
 from scipy.signal import fftconvolve, lfilter, cont2discrete, butter, sosfilt 
+from scipy.signal.windows import tukey
 from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
 from scipy.optimize import curve_fit
 from scipy.fft import rfft, irfft, rfftfreq
@@ -396,6 +397,7 @@ fft_uzs = None
 att_exp = None
 amplification= None
 phase_shift_z = None
+Nt = None
 f_VER_1_27 = None
 f_dVER_1_27 = None
 f_VER_4_28  = None
@@ -783,9 +785,9 @@ def init_worker_nightlow(_list_of_locations, _fft_vzs, _att_exp, _amplification,
     dir_save = _dir_save
 
 
-def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, _phase_shift_z,
+def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, _phase_shift_z, _Nt,
                 _z_4_28_calc_m, _fac_temperature, _f_VER_4_28, _loc_save, _itime_save, _gridded, _dir_save):
-    global fft_uzs, att_exp, amplification, phase_shift_z
+    global fft_uzs, att_exp, amplification, phase_shift_z, Nt
     global z_4_28_calc_m, fac_temperature, f_VER_4_28
     global list_of_locations, loc_save, itime_save, gridded, dir_save
 
@@ -794,6 +796,7 @@ def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, 
     att_exp = _att_exp
     amplification = _amplification
     phase_shift_z = _phase_shift_z
+    Nt = _Nt
     z_4_28_calc_m = _z_4_28_calc_m
     f_VER_4_28 = _f_VER_4_28
     fac_temperature = _fac_temperature
@@ -808,6 +811,7 @@ def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, 
 def propagate_attenuate(fft, i_east, i_north, att, ampl, psz):
     ### Apply attenuation and amplification at all z 
     ### shape attenuation, phase_shift: (Nz, Nw). Shape velocity, fft: (Ne, Nn, Nz, Nw)
+    ### To properly account for the displacement (or velocity) steps, all time traces need to be padded in time beforehand
 
     att_vz = fft[i_east, i_north, np.newaxis, :] * att
     ampl_vz_z = att_vz * ampl[:, np.newaxis]
@@ -1060,7 +1064,7 @@ def nightglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplificati
 # =========================================================================================================
 ### Wrapper function for calculating DAYglow at one location (outside of class to be parallelisable)
 # =========================================================================================================
-def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification, phase_shift_z, 
+def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification, phase_shift_z, Nt,
                         z_4_28_calc_m, fac_temperature, f_VER_4_28, loc_save, itime_save, gridded, dir_save):
     
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
@@ -1069,6 +1073,10 @@ def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification
     #     print(i_en, i_east, i_north)
     
     uz_z, fft_uz_z = propagate_attenuate(fft_uzs, i_east, i_north, att_exp, amplification, phase_shift_z)
+    ### Remove padding
+    uz_z = uz_z[:,:Nt]
+    ### Ensure signal starts at 0 
+    uz_z -= uz_z[:,0][:,None]
     ###
     dver_z = temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature)
     ### With advection of VER term (BK):
@@ -1103,7 +1111,7 @@ def worker_func_nightglow(i):
 def worker_func_dayglow(i):
     # location = list_of_locations[i]
     return dayglow_at_location(i, list_of_locations, fft_uzs, att_exp, amplification, 
-                               phase_shift_z, z_4_28_calc_m, fac_temperature, f_VER_4_28, 
+                               phase_shift_z, Nt, z_4_28_calc_m, fac_temperature, f_VER_4_28, 
                                loc_save, itime_save, gridded, dir_save)
 
 
@@ -1779,25 +1787,46 @@ class AirglowSignal:
         save_wavefield = np.zeros((self.Ne, self.Nn, self.Nz, len(time_save),2 ))
         save_intensity_dver = np.zeros((self.Ne, self.Nn,len(time_save)))
 
-        ### Define frequencies 
-        freqsi = sfft.fftfreq(d=self.dt, n=self.Nt)
-        freqsp = abs(freqsi)
-
+        ### We pad seismograms in time: 
+        self.dpad = sfft.next_fast_len(self.Nt*2, real=True) - self.Nt
+        al = 0.1
+        long_DIS = np.pad(self.DIS, ((0,0),(0,0),(0, self.dpad )), mode='constant')
+        #long_DIS[:,:,self.Nt:] = tukey(2*self.dpad, alpha=al)[None,None,self.dpad:]*self.DIS[:,:,-1][:,:,None]
+        # fig, ax = plt.subplots() 
+        # ax.plot(long_DIS[0,19,:])
+        # ax.plot(self.DIS[0,19,:])
+        # print(brou)
         ### Fourier transform of seismograms 
-        fft_uzs = sfft.fft(self.DIS, axis=2)
+        fft_uzs = sfft.fft(long_DIS, axis=2)
+        Ntpad = long_DIS.shape[2]
+        # fft_uzs = sfft.fft(self.DIS, axis=2)
         # fft_vzs = sfft.fft(self.VEL, axis=2)
 
+        ### Define frequencies 
+        # freqsi = sfft.fftfreq(d=self.dt, n=self.Nt)
+        freqsi = sfft.fftfreq(d=self.dt, n=Ntpad)
+        freqsp = abs(freqsi)
+
         ### Pre-calculate the phase shift corresponding to the delay with altitude 
-        self.phase_shift_z = np.zeros((self.Nz, self.Nt), dtype = np.complex64)
+        # self.phase_shift_z = np.zeros((self.Nz, self.Nt), dtype = np.complex64)
+        self.phase_shift_z = np.zeros((self.Nz, Ntpad), dtype = np.complex64)
         ### Integrated travel time from zero to airglow altitudes 
         self.travel_time = self.dz_4_28_m * np.cumsum(1/self.f_c(self.z_att_4_28_m))
         self.travel_time = self.travel_time[-self.Nz:]
-        for jz, zz in enumerate(self.z_4_28_calc_m):
-            ### Constant propagation velocity og 300 m/s
-            #self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * zz / 0.3)
-
+        for jz in range(self.Nz):
             ### Integrated propagation velocity from zero to altitude z  
             self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * self.travel_time[jz] )
+        ### Enforce Hermitian symmetry explicitly (works for odd/even N)
+        if Ntpad % 2 == 0:
+            pos = np.arange(1, Ntpad//2)        # 1..(N/2-1)
+            self.phase_shift_z[:, 0] = self.phase_shift_z[:, 0].real
+            self.phase_shift_z[:, Ntpad//2] = self.phase_shift_z[:, Ntpad//2].real
+        else:
+            print("here")
+            pos = np.arange(1, (Ntpad-1)//2 + 1)  # 1..(N-1)//2
+            self.phase_shift_z[:, 0] = self.phase_shift_z[:, 0].real
+        neg = (-pos) % Ntpad
+        self.phase_shift_z[:, neg] = np.conj(self.phase_shift_z[:, pos])
 
         ### Grid of amplification 
         self.amplification = self.f_amplification(self.z_4_28_calc_m)
@@ -1838,7 +1867,7 @@ class AirglowSignal:
             for i_en in tqdm(list_indices, total=len(list_ieast), disable=False):
                 # i_en = 3360
                 uz_z_it, dver_z_it, amp_dayglow_it = dayglow_at_location(i_en, list_of_locations, fft_uzs, self.att_exp, self.amplification, 
-                                                                          self.phase_shift_z,self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, 
+                                                                          self.phase_shift_z, self.Nt, self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, 
                                                                           loc_save_idx, itime_save, self.gridded, dir_save)
                 
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
@@ -1857,7 +1886,7 @@ class AirglowSignal:
             ### we need to move to joblib and memory maps. 
             with get_context("fork").Pool(processes=n_cpus,
                                             initializer=init_worker_dayglow,
-                                            initargs=(list_of_locations, fft_uzs, self.att_exp, self.amplification, self.phase_shift_z,
+                                            initargs=(list_of_locations, fft_uzs, self.att_exp, self.amplification, self.phase_shift_z, self.Nt,
                                                     self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, loc_save_idx, itime_save, self.gridded, dir_save)
                                                 ) as p:
                 
