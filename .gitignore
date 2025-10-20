@@ -1,4 +1,5 @@
 results/
+Figures/
 __pycache__/
 .ipynb*
 results_detectability/
