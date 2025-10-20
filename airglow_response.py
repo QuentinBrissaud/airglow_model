@@ -2670,7 +2670,8 @@ class AirglowSignal:
 # =========================================================================================================
 ### New AIRGLOW SCALER 
 # =========================================================================================================
-def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True, effect=None):
+def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True, effect=None, tit ="", 
+                               store_ids_dists = [('GF_venus_Cold100_qssp_grid',0e3,500e3),('GF_venus_Cold100_qssp_grid_mid',500e3,8000e3)]):
     '''
     We calculate airglow signals for a series of receiver locations and source depths. 
     '''
@@ -2707,7 +2708,7 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
         #store_id = 'GF_venus_Cold100_qssp',
         #store_id = 'GF_venus_Cold100_qssp_grid',
         ### Give store names, and min and max valid distance 
-        store_ids_dists = [('GF_venus_Cold100_qssp_grid',0e3,500e3),('GF_venus_Cold100_qssp_grid_mid',500e3,8000e3)],
+        store_ids_dists = store_ids_dists,
         ###
         ### Options for grid 
         north_shifts = north_shifts, 
@@ -2904,7 +2905,7 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
         if effect == "ampl":
             fig.savefig(dir_save + "Airglow_scaler_amplification.png", dpi=300)
         else:
-            fig.savefig(dir_save + "Airglow_scaler.png", dpi=300)
+            fig.savefig(dir_save + "Airglow_scaler"+ tit + ".png", dpi=300)
     
     # if effect =="ampl":
     #     np.save(dir_save + "test_"+ tit + "_nightglow", scaling_nightglow_plot.nightglow)
