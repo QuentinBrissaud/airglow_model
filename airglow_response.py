@@ -2784,6 +2784,10 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
         ax.set_ylabel("Altitude / [$km$]")
         fig.tight_layout()
         
+        # np.save("./data/altitude_amplification", alt_files)
+        # np.save("./data/amplification_min", prof_ampl_min)
+        # np.save("./data/amplification_max", prof_ampl_max)
+        # quit()
         ### Do MIN 
         # AIRGLOW.f_amplification = interpolate.interp1d(alt_files, prof_ampl_min, kind='quadratic')
         # tit = "ampli_min"
