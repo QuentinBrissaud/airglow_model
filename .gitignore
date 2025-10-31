@@ -1,4 +1,5 @@
 results/
+results_test/
 Figures/
 __pycache__/
 .ipynb*

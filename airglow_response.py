@@ -760,16 +760,17 @@ def _factor_W_to_Rayleigh(L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
 # =========================================================================================================
 ### Function to define global parameters for parallelisation 
 # =========================================================================================================
-def init_worker_nightlow(_list_of_locations, _fft_vzs, _att_exp, _amplification, _phase_shift_z,
+def init_worker_nightlow(_list_of_locations, _fft_vzs, _fft_uzs, _att_exp, _amplification, _phase_shift_z,
                 _f_VER_1_27,_f_dVER_1_27, _z_1_27_calc_m, _fourier_filtering, _Nt, _fs, 
                 _b, _a, _loc_save, _itime_save, _gridded, _tf_phase_nightglow, _dir_save):
-    global fft_vzs, att_exp, amplification, phase_shift_z
+    global fft_vzs, fft_uzs, att_exp, amplification, phase_shift_z
     global f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, fourier_filtering, tf_phase_nightglow, Nt, fs
     global b, a
     global list_of_locations, loc_save, itime_save, gridded, dir_save
 
     list_of_locations = _list_of_locations
     fft_vzs = _fft_vzs
+    fft_uzs = _fft_uzs
     att_exp = _att_exp
     amplification = _amplification
     phase_shift_z = _phase_shift_z
@@ -815,6 +816,7 @@ def propagate_attenuate(fft, i_east, i_north, att, ampl, psz):
     ### Apply attenuation and amplification at all z 
     ### shape attenuation, phase_shift: (Nz, Nw). Shape velocity, fft: (Ne, Nn, Nz, Nw)
     ### To properly account for the displacement (or velocity) steps, all time traces need to be padded in time beforehand
+    print(att.shape, fft.shape, ampl.shape)
 
     att_vz = fft[i_east, i_north, np.newaxis, :] * att
     ampl_vz_z = att_vz * ampl[:, np.newaxis]
@@ -838,7 +840,7 @@ def propagate_attenuate(fft, i_east, i_north, att, ampl, psz):
 
 # =========================================================================================================
 ### Function to transform velocity at a specific altitude into VER perturbation 
-def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, tf_phase_nightglow=None, fourier_filtering=False, test=False):
+def velocity_to_dVER_nightglow(uz_z, vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, tf_phase_nightglow=None, fourier_filtering=False, test=False):
 
     fver_alt = f_VER_1_27(z_1_27_calc_m)[:,np.newaxis]
     fdver_alt = f_dVER_1_27(z_1_27_calc_m)[:,np.newaxis]
@@ -855,7 +857,7 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
         ### VERSION OF BK 
         #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
 
-        dver_z = lfilter(b, a, dver_vz_z, axis=1)
+        dver_z = lfilter(b, a, dver_vz_z, axis=1) #+ uz_z*fdver_alt
     else:
         ### Compute VER and its vertical gradient (numpy gradient) FOURIER DOMAIN 
         #ver_vz = fver_alt * fft_vz_z  # shape: (Nz, Nt) 
@@ -864,9 +866,12 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
         ### VERSION OF PL 
         # dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
         ### VERSION OF BK 
-        #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
+        # dver_vz_z = fver_alt * np.gradient(fft_vz_z, z_1_27_calc_m, axis=0)
 
-        dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real
+        #dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real
+        ### Testing the advection term : we get u by integrating v in frequency 
+        dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real  + uz_z*fdver_alt
+        # dver_z = uz_z * fdver_alt
 
         ### Simple linear detrend 
         ### dver_z = signal.detrend(dver_z, type="linear", axis=1) ### way too slow 
@@ -996,7 +1001,7 @@ def velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER
         quit()
 
     ### Ensure dVER starts at zero 
-    dver_z -= dver_z[:,0][:,np.newaxis]
+    # dver_z -= dver_z[:,0][:,np.newaxis]
 
     return(dver_z)
 
@@ -1035,7 +1040,7 @@ def integrate_line_of_sight(dver_z, z_calc_m, wavelength):
 # =========================================================================================================
 ### Wrapper function for calculating NIGHTglow at one location (outside of class to be parallelisable)
 # =========================================================================================================
-def nightglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplification, phase_shift_z,f_VER_1_27, f_dVER_1_27,
+def nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, att_exp, amplification, phase_shift_z,f_VER_1_27, f_dVER_1_27,
                         z_1_27_calc_m, fourier_filtering, Nt, fs, b,a, loc_save, itime_save, gridded, tf_phase_nightglow, dir_save):
     
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
@@ -1044,8 +1049,9 @@ def nightglow_at_location(i_en, list_of_locations, fft_vzs, att_exp, amplificati
     #     print(i_en, i_east, i_north)
     
     vz_z, fft_vz_z = propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_shift_z)
+    uz_z, fft_uz_z = propagate_attenuate(fft_uzs, i_east, i_north, att_exp, amplification, phase_shift_z)
     ###
-    dver_z = velocity_to_dVER_nightglow(vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
+    dver_z = velocity_to_dVER_nightglow(uz_z, vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, f_dVER_1_27, b, a, 
                                         tf_phase_nightglow=tf_phase_nightglow, fourier_filtering= fourier_filtering)
     ### Remove padding
     dver_z = dver_z[:,:Nt]
@@ -1116,7 +1122,7 @@ def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification
 
 def worker_func_nightglow(i):
     # location = list_of_locations[i]
-    return nightglow_at_location(i, list_of_locations, fft_vzs, att_exp, amplification, 
+    return nightglow_at_location(i, list_of_locations, fft_vzs, fft_uzs, att_exp, amplification, 
                                phase_shift_z, f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, 
                                fourier_filtering, Nt, fs, b, a, loc_save, itime_save, gridded, tf_phase_nightglow, dir_save)
 
@@ -1132,7 +1138,7 @@ def worker_func_dayglow(i):
 class AirglowSignal:
 # =========================================================================================================
 
-    def __init__(self, SEISMO, Nz = 40, do_plot=False):
+    def __init__(self, SEISMO, Nz = 40, do_plot=False, disable_att = False):
         """
         Initialize the AirglowSignal model.
 
@@ -1147,7 +1153,11 @@ class AirglowSignal:
         self.unit = "photons"    ### Choose photons/s or Watts for VER definition. 
 
         ### READ WAVEFORM PARAMETERS 
-        self.__dict__.update(SEISMO.__dict__)
+        # self.__dict__.update(SEISMO.__dict__)
+        if hasattr(SEISMO, '__dict__'):
+            self.__dict__.update(SEISMO.__dict__)
+        elif isinstance(SEISMO, dict):
+            self.__dict__.update(SEISMO)
 
         ### READ ATMOSPHERIC DATA. 
         folder_data            = fold + 'data/'
@@ -1165,9 +1175,9 @@ class AirglowSignal:
 
         ### CONSTRUCT INTERPOLATED ABSPORTION / AMPLIFICATION MODELS 
         if use_kenda_att:
-            self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(file_attenuation_kenda=file_attenuation_kenda, do_plot=do_plot)
+            self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(file_attenuation_kenda=file_attenuation_kenda, do_plot=do_plot, disable_att = disable_att)
         else:
-            self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(dir_attenuation_GA=dir_attenuation_GA, do_plot=do_plot)
+            self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(dir_attenuation_GA=dir_attenuation_GA, do_plot=do_plot, disable_att = disable_att)
 
         ### Definitions for the calculation of 1_27 micrometer nightglow 
         self.tau = 4460 # s
@@ -1454,7 +1464,7 @@ class AirglowSignal:
         return 
 
     
-    def _load_absorption_amplification(self, file_attenuation_kenda=None, dir_attenuation_GA=None, do_plot=False):
+    def _load_absorption_amplification(self, file_attenuation_kenda=None, dir_attenuation_GA=None, do_plot=False, disable_att=False):
 
         if file_attenuation_kenda is not None:
             print("Using Balthasar Kenda's attenuation data")
@@ -1540,7 +1550,10 @@ class AirglowSignal:
             def f_amplification(z):
                 return( np.sqrt(self.f_rho(0)*self.f_c(0)/ (self.f_rho(z)*self.f_c(z))) )
             
-
+        if disable_att: 
+            ### Set alpha to zero everywhere 
+            f_alpha = interpolate.interp1d(freq, alpha_Npm*0, axis=1, bounds_error=False, fill_value=0.0)
+            f_alpha_2d = interpolate.RegularGridInterpolator((alts,freq), alpha_Npm*0, method='linear',fill_value=0, bounds_error=False)
 
         if do_plot:
             fig, (axa, axb) = plt.subplots(1,2, figsize=(8,4))
@@ -1650,6 +1663,7 @@ class AirglowSignal:
         ### We pad seismograms in time: 
         self.dpad = sfft.next_fast_len(self.Nt*12, real=True) - self.Nt
         long_VEL = np.pad(self.VEL, ((0,0),(0,0),(0, self.dpad )), mode='constant')
+        long_DIS = np.pad(self.DIS, ((0,0),(0,0),(0, self.dpad )), mode='constant')
         # al = 0.1
         #long_VEL[:,:,self.Nt:] = tukey(2*self.dpad, alpha=al)[None,None,self.dpad:]*self.VEL[:,:,-1][:,:,None]
         # fig, ax = plt.subplots() 
@@ -1658,6 +1672,7 @@ class AirglowSignal:
         # print(brou)
         ### Fourier transform of seismograms 
         fft_vzs = sfft.fft(long_VEL, axis=2)
+        fft_uzs = sfft.fft(long_DIS, axis=2)
         Ntpad = long_VEL.shape[2]
         # fft_vzs = sfft.fft(self.VEL, axis=2)
 
@@ -1687,7 +1702,7 @@ class AirglowSignal:
             # self.tf_phase_nightglow[:,0] = 0.0 + 0.0j
             
             ### Better option: Applying a high-pass filter to VER(t): H_hp(i omega) = iomega / (i omega + omega_c)
-            self.tf_phase_nightglow *= (1j*freqsi[None,:] / (1j*freqsi[None,:] + 1e-4))**2
+            # self.tf_phase_nightglow *= (1j*freqsi[None,:] / (1j*freqsi[None,:] + 1e-4))**2
         else:
             self.tf_phase_nightglow = None
 
@@ -1724,15 +1739,15 @@ class AirglowSignal:
                 #                                                                 fft_vzs, fourier_filtering, 
                 #                                                                 save_wavefield, save_intensity_dver, 
                 #                                                                 loc_save, itime_save)
-                vz_z_it, dver_z_it, amp_nightglow_it = nightglow_at_location(i_en, list_of_locations, fft_vzs, self.att_exp, self.amplification, 
+                vz_z_it, dver_z_it, amp_nightglow_it = nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, self.att_exp, self.amplification, 
                                                                           self.phase_shift_z,self.f_VER_1_27,self.f_dVER_1_27,
                                                                         self.z_1_27_calc_m, fourier_filtering, self.Nt, 1/self.dt,self.b, self.a, 
                                                                         loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow, dir_save)
-                if self.gridded:
-                    i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
-                    save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
-                    save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
-                    save_intensity_dver[i_east, i_north,:] = amp_nightglow_it  ### Save Intensity at altitude z
+                
+                i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
+                save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
+                save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
+                save_intensity_dver[i_east, i_north,:] = amp_nightglow_it  ### Save Intensity at altitude z
 
             # t2 = ptime.time()
             # print(t2-t1)
@@ -1744,7 +1759,7 @@ class AirglowSignal:
             ### we need to move to joblib and memory maps. 
             with get_context("fork").Pool(processes=n_cpus,
                                             initializer=init_worker_nightlow,
-                                            initargs=(list_of_locations, fft_vzs, self.att_exp, self.amplification, self.phase_shift_z,
+                                            initargs=(list_of_locations, fft_vzs, fft_uzs,  self.att_exp, self.amplification, self.phase_shift_z,
                                                     self.f_VER_1_27, self.f_dVER_1_27, self.z_1_27_calc_m, fourier_filtering,self.Nt, 1/self.dt,
                                                     self.b, self.a, 
                                                     loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow, dir_save)
@@ -2921,6 +2936,213 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
 
 
 
+# =========================================================================================================
+### Some verifications 
+# =========================================================================================================
+def check_simple_perturbation():
+    ### As in Balthasar Kenda's thesis, we send a sinusoidal perturbation with amplitude defined at 90 km 
+
+    freq = np.array([0.1,0.2,0.01, 0.02]) ### Hz
+    # freq = np.array([0.01]) ### Hz
+    c = 200      ### m/s
+    dt = 0.1     ## s
+    tf = 1000  ## s
+    hstart = 90e3  ### m 
+    time = np.arange(-tf, tf, dt)
+    Nt = time.size
+    VEL = np.zeros((1,freq.size, Nt))
+    DIS = np.zeros((1,freq.size, Nt))
+
+    def tapered_sinusoid(t, z, f0, c=200):
+        sig = np.sin(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.05)
+
+        tap = np.zeros(t.shape)
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt/2+Nprop),int(Nt/2-tp.size-Nprop)))
+            sig*=tap
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt/2+Nprop),int(Nt/2-tp.size-Nprop)))
+                sig[i,:]*=tap
+        return(sig)
+    
+    def tapered_sinusoid_dz(t, z, f0, c=200):
+        sig = -2*np.pi*f0/c*np.cos(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.05)
+        
+        tap = np.zeros(t.shape)
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt/2+Nprop),int(Nt/2-tp.size-Nprop)))
+            sig*=tap
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt/2+Nprop),int(Nt/2-tp.size-Nprop)))
+                sig[i,:]*=tap
+        return(sig)
+
+
+    VEL[0,:,:] = np.sin(2*np.pi*freq[:,None]*(time[None,:])) 
+    DIS[0,:,:] = np.sin(2*np.pi*freq[:,None]*(time[None,:])) 
+
+    tap = np.zeros((freq.size, Nt))
+    for fi, f0 in enumerate(freq):
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.05)
+        tap[fi,:] = np.pad(tp,(int(Nt/2),int(Nt/2-tp.size)))
+
+    VEL *= tap 
+    DIS *= tap
+
+    # print(hstart+np.linspace(-1,1,11))
+    # ### To verify that the signal and its derivative is calculated corectly
+    # fig, ax = plt.subplots() 
+    # for fi, f in enumerate(freq):
+    #     ax.plot(time, VEL[0,fi,:])
+    #     ax.plot(time, tapered_sinusoid(time, hstart, f), ls="--")
+    #     ax.plot(time, tapered_sinusoid_dz(time, hstart, f), ls="--")
+    #     ax.plot(time, np.gradient( tapered_sinusoid(time[None,:], hstart+np.linspace(-1e2,1e2,11)[:,None], f), hstart+np.linspace(-1e2,1e2,11), axis=0 )[5,:] , ls=":")
+    #     ax.plot(time, tap[fi,:])
+    # plt.show() 
+    # quit()
+
+
+    north_shifts = freq 
+    east_shifts = np.array([0. for i in range(north_shifts.size)])
+
+    SEISMO ={"dt": dt,
+             "t_new": time,
+             "Nt": Nt,
+             "VEL": VEL, 
+             "DIS": DIS,
+             "Nn" : north_shifts.size,  
+             "Ne" : 1 ,
+             "EE": east_shifts, 
+             "NN" : north_shifts,
+             "iEE" : [0 for i in freq],
+             "iNN" : range(north_shifts.size),
+             "gridded": False, 
+    }
+
+    AR = AirglowSignal(SEISMO, Nz = 40, do_plot=False, disable_att=True)
+    ### Disabled attenuation 
+
+    ### To concord with BK, the amplitude of the wave must be 5 mm/s at 90 km. 
+    ### We therefore rescale VEL using the amplification function 
+    AR.VEL = AR.VEL * 5e-3/AR.f_amplification(90e3)
+    AR.DIS = AR.DIS * 5e-3/AR.f_amplification(90e3)
+    ### Compute airglow 
+    list_inorth, list_ieast = AR.iNN, AR.iEE
+    AR.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[], time_save = time, fourier_filtering=True, 
+                               do_parallel=False, dir_save="./results_test/")
+    
+    dat = np.load("results_test/nightglow_dver_t.npy")
+    vz_z = dat[0,:,:,:,0]
+    ver_z = dat[0,:,:,:,1]
+    iz = np.argmin(abs(AR.z_1_27_calc_m - hstart))
+    print("Altitude of : ", iz, AR.z_1_27_calc_m[iz] )
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3,1, sharex = True, figsize=(7,10)) 
+    for fi, f in enumerate(freq):
+        ### Original vel shape  
+        ax1.plot(time, VEL[0,fi,:], label="{:.3g} Hz, {:.3g} s".format(f, 1/f))
+        ### Propagated at 90 km 
+        ax2.plot(time, vz_z[fi,iz,:])
+        ### Calculated VER 
+        ax3.plot(time, ver_z[fi,iz,:]/AR.f_VER_1_27(AR.z_1_27_calc_m[iz])*100)
+
+    ax1.set_ylabel("Input Signal")
+    ax2.set_ylabel("V_z at 90 km / [$s$]")
+    ax3.set_ylabel("VER perturbation at 90 km / [%]")
+    ax3.set_xlabel("Time / [$s$]")
+    ax3.set_xlim(-10,tf)
+    ax1.legend(frameon=False)
+    fig.align_labels() 
+    fig.tight_layout()
+
+    fig, ax = plt.subplots(figsize=(5,7)) 
+    im = ax.pcolormesh(time, AR.z_1_27_calc_km, ver_z[3,:,:])
+    fig.colorbar(im, ax=ax)
+    ax.set_xlabel("Time / [$s$]")
+    ax.set_ylabel("Altitude / [$km$]")
+    ax.set_xlim(0,500)
+    ax.set_ylim(90,120)
+
+
+    ### HANDMADE CALCUATION (analytical sinusoid): 
+    ### 0. Pick frequency 
+    f0 = 1/50
+    ### 1. Make up an altitude range  
+    zrange = np.linspace(90e3,120e3,100)
+    ### 2. Get frequencies 
+    ff = np.fft.fftfreq(Nt, d=dt)
+    om = ff*(2*np.pi)
+    ### 4. Get amplification, normalize by the value at 90 km: 
+    a_func = AR.f_amplification(zrange)[:,None]/AR.f_amplification(90e3)
+    ### 5. Defined derivative of tapered sinusoid (functions above) and normalize by amplitude 
+    tVEL = tapered_sinusoid(time[None,:], zrange[:,None], f0, c=c) * 5e-3
+    tVEL_dz = tapered_sinusoid_dz(time[None,:], zrange[:,None], f0, c=c) * 5e-3
+    print("Max of vel signal at z = 90 km: ", np.max(tVEL[0,:]))
+    ### 6. Get their fft
+    fftVEL = np.fft.fft(tVEL, axis=1)
+    fftVEL_dz = np.fft.fft(tVEL_dz, axis=1)
+    ### Calculate the desired dver in frequency domain (EQ 4.22): 
+    tau = 4460 # s 
+    fft_dver = -tau/(1+1j*om[None,:]*tau) * AR.f_VER_1_27(zrange)[:,None] * (fftVEL_dz*a_func  + fftVEL*np.gradient(a_func, zrange, axis=0) ) 
+    dver = np.fft.ifft(fft_dver, axis=1).real
+    
+
+    fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,8)) 
+    ### Original vel shape
+    iz = 0  
+    ### Propagated at 90 km 
+    ax2.plot(time, tVEL[iz,:], label="z = {:.1f} km".format(zrange[iz]))
+    ### Calculated VER 
+    ax3.plot(time, dver[iz,:]/AR.f_VER_1_27(zrange[iz])*100)
+    ### Integrated intensity 
+    I = np.trapz(dver, zrange, axis=0 )
+    I_background = np.trapz(AR.f_VER_1_27(zrange), zrange, axis=0 )
+    ax4.plot(time, I/I_background)
+
+    ax2.set_ylabel("V_z at 90 km / [$s$]")
+    ax3.set_ylabel("VER perturbation at 90 km / [%]")
+    ax4.set_ylabel("Relative Intensity perturbation")
+    ax4.set_xlabel("Time / [$s$]")
+    ax4.set_xlim(-10,tf)
+    ax2.legend(frameon=False)
+    fig.align_labels() 
+    fig.tight_layout()
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
+    ###
+    ax1.plot(AR.f_VER_1_27(zrange), zrange, c="k") 
+    ax1.set_xlabel("VER / ph/m3/s")
+    ax1.set_ylabel("Altitude / km")
+    ###
+    ax2.plot(AR.f_amplification(zrange)/AR.f_amplification(90e3), zrange, c="k") 
+    ax2.set_xlabel("Amplification with respect to 90 km")
+    ###
+    im = ax3.pcolormesh(time, zrange/1e3, dver[:,:])
+    fig.colorbar(im, ax=ax3)
+    ax3.set_xlabel("Time / [$s$]")
+    ax3.set_ylabel("Altitude / [$km$]")
+    ax3.set_xlim(0,800)
+    ax3.set_ylim(90,120)
+    plt.show()
+
+
+
+    quit()
+
+
+
+
 
 
 
@@ -3766,6 +3988,9 @@ def plot_airglow_traces(amp_dayglow, amp_nightglow, GF_f0, GF_f0_u, amp_at_90, f
 # =========================================================================================================
 if __name__ == '__main__':
 # =========================================================================================================
+
+    check_simple_perturbation()
+    quit()
 
     ## Load atmosphere
     f_rho, f_t, f_gamma, f_c, f_VER, f_VER_dayglow = load_atmosphere(folder_data=fold+'data/')
