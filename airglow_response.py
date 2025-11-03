@@ -816,7 +816,6 @@ def propagate_attenuate(fft, i_east, i_north, att, ampl, psz):
     ### Apply attenuation and amplification at all z 
     ### shape attenuation, phase_shift: (Nz, Nw). Shape velocity, fft: (Ne, Nn, Nz, Nw)
     ### To properly account for the displacement (or velocity) steps, all time traces need to be padded in time beforehand
-    print(att.shape, fft.shape, ampl.shape)
 
     att_vz = fft[i_east, i_north, np.newaxis, :] * att
     ampl_vz_z = att_vz * ampl[:, np.newaxis]
@@ -857,18 +856,20 @@ def velocity_to_dVER_nightglow(uz_z, vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, 
         ### VERSION OF BK 
         #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
 
-        dver_z = lfilter(b, a, dver_vz_z, axis=1) #+ uz_z*fdver_alt
+        dver_z = lfilter(b, a, dver_vz_z, axis=1)+ uz_z*fdver_alt
     else:
         ### Compute VER and its vertical gradient (numpy gradient) FOURIER DOMAIN 
         #ver_vz = fver_alt * fft_vz_z  # shape: (Nz, Nt) 
         ### SMOOTH GRADIENT 
-        dver_vz_z = fver_alt * np.gradient(fft_vz_z, z_1_27_calc_m, axis=0) + fdver_alt*fft_vz_z       
+        # dver_vz_z = fver_alt * np.gradient(fft_vz_z, z_1_27_calc_m, axis=0) + fdver_alt*fft_vz_z       
         ### VERSION OF PL 
         # dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
         ### VERSION OF BK 
-        # dver_vz_z = fver_alt * np.gradient(fft_vz_z, z_1_27_calc_m, axis=0)
+        dver_vz_z = fver_alt * np.gradient(fft_vz_z, z_1_27_calc_m, axis=0)
+        ### VERSION OF BK, transformed by IPP  
+        # dver_vz_z = fdver_alt * fft_vz_z
 
-        #dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real
+        # dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real
         ### Testing the advection term : we get u by integrating v in frequency 
         dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real  + uz_z*fdver_alt
         # dver_z = uz_z * fdver_alt
@@ -1138,7 +1139,7 @@ def worker_func_dayglow(i):
 class AirglowSignal:
 # =========================================================================================================
 
-    def __init__(self, SEISMO, Nz = 40, do_plot=False, disable_att = False):
+    def __init__(self, SEISMO, Nz = 50, do_plot=False, disable_att = False):
         """
         Initialize the AirglowSignal model.
 
@@ -1183,7 +1184,8 @@ class AirglowSignal:
         self.tau = 4460 # s
         self.b, self.a = self._def_filter_nightglow()
         self.Nz = Nz    # Number of altitude points for gradients and integrations. 
-        self.z_1_27_calc_m = np.linspace(self.z_1_27_min, self.z_1_27_max, self.Nz)  # in meters, always 
+        # self.z_1_27_calc_m = np.linspace(self.z_1_27_min, self.z_1_27_max, self.Nz)  # in meters, always 
+        self.z_1_27_calc_m = np.linspace(70e3, 150e3, self.Nz)  # in meters, always 
         self.z_1_27_calc_km = self.z_1_27_calc_m / 1e3        
         self.dz_1_27_m = np.diff(self.z_1_27_calc_m)[0]
         ### For calculation of cumulated attenuation: 
@@ -1613,11 +1615,11 @@ class AirglowSignal:
         den2 = [1, omega_c]
 
         ### Multiply the transfer functions
-        num = np.polymul(num, num2)
-        den = np.polymul(den, den2)
+        # num = np.polymul(num, num2)
+        # den = np.polymul(den, den2)
         ### Do a second multiplication to get second order 
-        num = np.polymul(num, num2)
-        den = np.polymul(den, den2)
+        # num = np.polymul(num, num2)
+        # den = np.polymul(den, den2)
 
         system_d = cont2discrete((num, den), self.dt, method='bilinear')
         b, a = system_d[0].flatten(), system_d[1].flatten()
@@ -1696,10 +1698,12 @@ class AirglowSignal:
         ### If using fourier filtering, prepare the filter: 
         if fourier_filtering:
             self.tf_phase_nightglow = -(self.tau/(1+1j*2*np.pi*freqsi[None,:]*self.tau)) 
+            ### Definition based on advection term
+            # self.tf_phase_nightglow = ((2*self.tau+1/(1j*2*np.pi*freqsi[None,:]))/(1+1j*2*np.pi*freqsi[None,:]*self.tau)) 
             ### Set no gain at low frequencies 
             ### PB: Sets mean to zero but trend is still there
             ### After detrending + resetting VER(0)=0, this effectively doesn't do anything... 
-            # self.tf_phase_nightglow[:,0] = 0.0 + 0.0j
+            self.tf_phase_nightglow[:,0] = 0.0 + 0.0j
             
             ### Better option: Applying a high-pass filter to VER(t): H_hp(i omega) = iomega / (i omega + omega_c)
             # self.tf_phase_nightglow *= (1j*freqsi[None,:] / (1j*freqsi[None,:] + 1e-4))**2
@@ -2942,13 +2946,17 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
 def check_simple_perturbation():
     ### As in Balthasar Kenda's thesis, we send a sinusoidal perturbation with amplitude defined at 90 km 
 
-    freq = np.array([0.1,0.2,0.01, 0.02]) ### Hz
+    freq = np.array([0.2,0.1,0.02, 0.01]) ### Hz
     # freq = np.array([0.01]) ### Hz
     c = 200      ### m/s
     dt = 0.1     ## s
     tf = 1000  ## s
-    hstart = 90e3  ### m 
-    time = np.arange(-tf, tf, dt)
+    hstart = 90e3  ### m   ### To test BK 
+    # hstart = 100e3  ### m   ### To test Sutin 
+    ampl_at_start = 5e-3   ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda) 
+    # ampl_at_start = 4e-2   ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin) 
+
+    time = np.arange(-tf/10, tf, dt)
     Nt = time.size
     VEL = np.zeros((1,freq.size, Nt))
     DIS = np.zeros((1,freq.size, Nt))
@@ -2956,63 +2964,58 @@ def check_simple_perturbation():
     def tapered_sinusoid(t, z, f0, c=200):
         sig = np.sin(2*np.pi*f0*(t - z/c))
         Nsine = int((1/f0)/dt)
-        tp = tukey(Nsine, alpha=0.05)
+        tp = tukey(Nsine, alpha=0.0)
 
         tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
         if np.isscalar(z):
             Nprop = int(z/c/dt)
-            tap = np.pad(tp,(int(Nt/2+Nprop),int(Nt/2-tp.size-Nprop)))
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
             sig*=tap
         else:
             for i in range(z.size):
                 Nprop = int(z[i,0]/c/dt)
-                tap = np.pad(tp,(int(Nt/2+Nprop),int(Nt/2-tp.size-Nprop)))
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
                 sig[i,:]*=tap
         return(sig)
     
     def tapered_sinusoid_dz(t, z, f0, c=200):
         sig = -2*np.pi*f0/c*np.cos(2*np.pi*f0*(t - z/c))
         Nsine = int((1/f0)/dt)
-        tp = tukey(Nsine, alpha=0.05)
+        tp = tukey(Nsine, alpha=0.0)
         
         tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
         if np.isscalar(z):
             Nprop = int(z/c/dt)
-            tap = np.pad(tp,(int(Nt/2+Nprop),int(Nt/2-tp.size-Nprop)))
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
             sig*=tap
+            sig -= np.mean(sig)
         else:
             for i in range(z.size):
                 Nprop = int(z[i,0]/c/dt)
-                tap = np.pad(tp,(int(Nt/2+Nprop),int(Nt/2-tp.size-Nprop)))
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
                 sig[i,:]*=tap
+            sig -= np.mean(sig, axis=1)[:,None]
         return(sig)
 
-
-    VEL[0,:,:] = np.sin(2*np.pi*freq[:,None]*(time[None,:])) 
-    DIS[0,:,:] = np.sin(2*np.pi*freq[:,None]*(time[None,:])) 
-
-    tap = np.zeros((freq.size, Nt))
-    for fi, f0 in enumerate(freq):
-        Nsine = int((1/f0)/dt)
-        tp = tukey(Nsine, alpha=0.05)
-        tap[fi,:] = np.pad(tp,(int(Nt/2),int(Nt/2-tp.size)))
-
-    VEL *= tap 
-    DIS *= tap
 
     # print(hstart+np.linspace(-1,1,11))
     # ### To verify that the signal and its derivative is calculated corectly
     # fig, ax = plt.subplots() 
     # for fi, f in enumerate(freq):
     #     ax.plot(time, VEL[0,fi,:])
-    #     ax.plot(time, tapered_sinusoid(time, hstart, f), ls="--")
+    #     # ax.plot(time, tapered_sinusoid(time, hstart, f), ls="--")
     #     ax.plot(time, tapered_sinusoid_dz(time, hstart, f), ls="--")
     #     ax.plot(time, np.gradient( tapered_sinusoid(time[None,:], hstart+np.linspace(-1e2,1e2,11)[:,None], f), hstart+np.linspace(-1e2,1e2,11), axis=0 )[5,:] , ls=":")
-    #     ax.plot(time, tap[fi,:])
     # plt.show() 
     # quit()
 
 
+    ### Construct ground sinusoid for our own framework: 
+    for fi, f0 in enumerate(freq):
+        VEL[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
+        DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_sinusoid(time, 0e3, f0, c=c), time, initial=0)
     north_shifts = freq 
     east_shifts = np.array([0. for i in range(north_shifts.size)])
 
@@ -3035,107 +3038,281 @@ def check_simple_perturbation():
 
     ### To concord with BK, the amplitude of the wave must be 5 mm/s at 90 km. 
     ### We therefore rescale VEL using the amplification function 
-    AR.VEL = AR.VEL * 5e-3/AR.f_amplification(90e3)
-    AR.DIS = AR.DIS * 5e-3/AR.f_amplification(90e3)
+    AR.VEL = AR.VEL * ampl_at_start/AR.f_amplification(hstart)
+    AR.DIS = AR.DIS * ampl_at_start/AR.f_amplification(hstart)
     ### Compute airglow 
     list_inorth, list_ieast = AR.iNN, AR.iEE
     AR.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[], time_save = time, fourier_filtering=True, 
                                do_parallel=False, dir_save="./results_test/")
     
     dat = np.load("results_test/nightglow_dver_t.npy")
+    dati = np.load("results_test/nightglow_I_t.npy")
     vz_z = dat[0,:,:,:,0]
     ver_z = dat[0,:,:,:,1]
+    I1 = dati[0,:,:]
     iz = np.argmin(abs(AR.z_1_27_calc_m - hstart))
     print("Altitude of : ", iz, AR.z_1_27_calc_m[iz] )
 
-    fig, (ax1, ax2, ax3) = plt.subplots(3,1, sharex = True, figsize=(7,10)) 
+
+    ################################################################################################################
+    fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,9)) 
+    cmap = plt.get_cmap("plasma")
+    cols = [cmap(i) for i in np.linspace(0.2, 0.8, freq.size)]
+    ### Propagated at 90 km 
     for fi, f in enumerate(freq):
-        ### Original vel shape  
-        ax1.plot(time, VEL[0,fi,:], label="{:.3g} Hz, {:.3g} s".format(f, 1/f))
-        ### Propagated at 90 km 
-        ax2.plot(time, vz_z[fi,iz,:])
+
+        ### Starting waveform at 90 km 
+        ax2.plot(time, vz_z[fi,iz,:], c=cols[fi], label="f={:.3g} Hz, T={:.3g} s".format(f, 1/f))
+        if fi == freq.size-1:
+            ax2.set_ylim(-1.5*ampl_at_start,1.5*ampl_at_start)
         ### Calculated VER 
-        ax3.plot(time, ver_z[fi,iz,:]/AR.f_VER_1_27(AR.z_1_27_calc_m[iz])*100)
-
-    ax1.set_ylabel("Input Signal")
-    ax2.set_ylabel("V_z at 90 km / [$s$]")
-    ax3.set_ylabel("VER perturbation at 90 km / [%]")
-    ax3.set_xlabel("Time / [$s$]")
-    ax3.set_xlim(-10,tf)
-    ax1.legend(frameon=False)
+        vmin = -np.max(np.abs(ver_z[fi,iz,:]))*1.1
+        vmax = np.max(np.abs(ver_z[fi,iz,:]))*1.1
+        print(vmin, vmax)
+        ax3.plot(time, ver_z[fi,iz,:]/AR.f_VER_1_27(AR.z_1_27_calc_m[iz])*100, c=cols[fi])
+        if fi == freq.size-1:
+            ax3b = ax3.twinx() 
+            ax3b.plot(time, ver_z[fi,iz,:], ls=" ", color="w")    
+            ax3.set_ylim(vmin/AR.f_VER_1_27(AR.z_1_27_calc_m[iz])*100, vmax/AR.f_VER_1_27(AR.z_1_27_calc_m[iz])*100)
+            ax3b.set_ylim(vmin, vmax)
+        ### Integrated Intensity
+        imin = -np.max(np.abs(I1[fi,:]))*1.1
+        imax = np.max(np.abs(I1[fi,:]))*1.1
+        ax4.plot(time, I1[fi,:]/AR.I_background_nightglow*100, c=cols[fi])
+        ### NOTE: No need to conversion to Rayleigh here, it is already done. 
+        if fi== freq.size-1:
+            ax4b = ax4.twinx() 
+            ax4b.plot(time, I1[fi,:], c="k", ls=" ")
+            ax4.set_ylim(imin/AR.I_background_nightglow*100, imax/AR.I_background_nightglow*100)
+            ax4b.set_ylim(imin, imax)
+    ###
+    ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(AR.z_1_27_calc_m[iz]/1e3) + r" / [$s$]")
+    ax3.set_ylabel("VER$_{1.27}$ pert. at " + "{:.1f} km".format(AR.z_1_27_calc_m[iz]/1e3) + r" / [%]")
+    ax3b.set_ylabel(r"VER$_{1.27}$ pert. at " + "{:.1f} km".format(AR.z_1_27_calc_m[iz]/1e3) + r" / [$ph/m^3/s$]")
+    ax4.set_ylabel("Relative Intensity pert. [%]")
+    ax4b.set_ylabel("Intensity pert. [$Rayleigh$]")
+    ax4.set_xlabel("Time / [$s$]")
+    ax4.set_xlim(-10,tf)
+    ax2.legend(frameon=False)
+    for ax in  [ax2, ax3, ax4, ax3b, ax4b]:
+        ax.ticklabel_format(style='sci', axis='y', scilimits=(-2, 2), useMathText=True)
+    ###
     fig.align_labels() 
+    fig.suptitle("Calculated with Airglow framework")
     fig.tight_layout()
+    ################################################################################################################
 
-    fig, ax = plt.subplots(figsize=(5,7)) 
-    im = ax.pcolormesh(time, AR.z_1_27_calc_km, ver_z[3,:,:])
-    fig.colorbar(im, ax=ax)
-    ax.set_xlabel("Time / [$s$]")
+
+    
+
+    ################################################################################################################
+    fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
+    fi_50 = 2
+    ###
+    ax1.plot(AR.f_VER_1_27(AR.z_1_27_calc_m), AR.z_1_27_calc_km, c="k") 
+    ax1b = ax1.twiny()
+    ax1b.plot(np.max(abs(ver_z[fi_50,:,:]), axis=1)/AR.f_VER_1_27(AR.z_1_27_calc_m)*100, AR.z_1_27_calc_km, c="r", label="Max Perturbation")
+    ax1b.set_xlabel(r"Max. VER$_{1.27}$ perturbation / [%]")
+    ax1b.xaxis.label.set_color('red')
+    ax1.set_xlabel("VER / ph/m3/s")
+    ax1.set_ylabel("Altitude / km")
+    ax1.set_xlim(0,5.5e11)
+    ###
+    ax2.plot(AR.f_amplification(AR.z_1_27_calc_m)/AR.f_amplification(90e3), AR.z_1_27_calc_km, c="k", label=r"$\sqrt{\rho(90)c(90)/(\rho(z)c(z))}$") 
+    ax2.set_xlabel("Amplification with respect to 90 km")
+    ax2.legend(frameon=False, loc=4)
+    ax2.set_xlim(0,70)
+    ###
+    im = ax3.pcolormesh(time, AR.z_1_27_calc_km, ver_z[fi_50,:,:], vmin=-np.max(np.abs(ver_z[fi_50,:,:])), vmax=np.max(np.abs(ver_z[fi_50,:,:])))
+    ax3.axhline(AR.z_1_27_calc_km[np.argmax(np.max(abs(ver_z[fi_50,:,:]), axis=1))], c="w", ls=":", label="Maximum perturbation")
+    ax3.axhline(AR.z_1_27_calc_km[np.argmax(AR.f_VER_1_27(AR.z_1_27_calc_m))], c="w", ls="--", label=r"Maximum VER$_{1.27}$")
+    fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{1.27}$ [$ph/m^3/s$]")
+    ax3.set_xlabel("Time / [$s$]")
+    leg = ax3.legend(frameon=False, loc=2)
+    for text in leg.get_texts():
+        text.set_color('w') # Set all legend text to green
+    # ax3.set_ylabel("Altitude / [$km$]")
+    ax3.set_xlim(0,1000)
+    ax3.set_ylim(90,120)
+    for ax in [ax1,ax2,ax3]:
+        ax.set_ylim(90,120)
+    fig.suptitle("Calculated with Airglow framework")
+    fig.tight_layout()
+    ################################################################################################################
+
+    ### PLOTTING THE DIFFERENT DIVERGENCE TERMS
+    tp = 440 
+    it = np.argmin(abs(time-tp))
+    fig, (ax, axt) = plt.subplots(1,2,figsize=(8,7)) 
+    ###
+    # ax.plot( np.gradient(vz_z[fi_50,:,it], AR.z_1_27_calc_m), AR.z_1_27_calc_km, c="r", label=r"$\nabla \cdot v_z$")
+    # ax.plot( np.gradient(AR.f_VER_1_27(AR.z_1_27_calc_m), AR.z_1_27_calc_m), AR.z_1_27_calc_km, c="k", label=r"$\nabla \cdot VER(z)$")
+    # ax.plot( AR.f_dVER_1_27(AR.z_1_27_calc_m), AR.z_1_27_calc_km, c="k", label=r"$\nabla \cdot VER(z)$")
+    ax.plot( AR.f_VER_1_27(AR.z_1_27_calc_m)*np.gradient(vz_z[fi_50,:,it], AR.z_1_27_calc_m), AR.z_1_27_calc_km, c="k", ls="-", label=r"$VER \;\nabla \cdot v_z$")
+    ax.plot( np.gradient(AR.f_VER_1_27(AR.z_1_27_calc_m)*vz_z[fi_50,:,it], AR.z_1_27_calc_m), AR.z_1_27_calc_km, c="k", ls="--", label=r"$\nabla \cdot (VER \;v_z)$")
+    ax.plot( integrate.cumulative_trapezoid(vz_z[fi_50,:,:], time, axis=1, initial=0)[:,it]  * AR.f_dVER_1_27(AR.z_1_27_calc_m), AR.z_1_27_calc_km, c="k", ls=":", label=r"$u_z \cdot \nabla VER$")
     ax.set_ylabel("Altitude / [$km$]")
-    ax.set_xlim(0,500)
-    ax.set_ylim(90,120)
+    ax.set_ylabel("Divergence terms")
+    ax.legend(frameon=False)
+    ###
+    axt.plot(time, 1/(2*np.pi/50) * integrate.trapezoid(AR.f_VER_1_27(AR.z_1_27_calc_m)[:,None]*np.gradient(vz_z[fi_50,:,:], AR.z_1_27_calc_m, axis=0), AR.z_1_27_calc_m, axis=0) ,
+                     c="k", ls="-", label=r"Integrated, $1/\omega\;VER \;\nabla \cdot v_z$")
+    axt.plot(time, 1/(2*np.pi/50) * integrate.trapezoid(-AR.f_dVER_1_27(AR.z_1_27_calc_m)[:,None]*vz_z[fi_50,:,:], AR.z_1_27_calc_m, axis=0) ,
+                     c="purple", ls="--", label=r"Integrated, -$1/\omega\;v_z\cdot \nabla VER$")
+    axt.plot(time, 1/(2*np.pi/50) * integrate.trapezoid( np.gradient(AR.f_VER_1_27(AR.z_1_27_calc_m)[:,None]*vz_z[fi_50,:,:], AR.z_1_27_calc_m, axis=0), AR.z_1_27_calc_m, axis=0), 
+                     c="r", ls="--", label=r"Integrated $1/\omega\;\nabla \cdot (VER \;v_z)$")
+    axt.plot(time, integrate.trapezoid(   integrate.cumulative_trapezoid(vz_z[fi_50,:,:], time, axis=1, initial=0)  * AR.f_dVER_1_27(AR.z_1_27_calc_m)[:,None], AR.z_1_27_calc_m,axis=0),
+                     c="k", ls=":", label=r"$u_z \cdot \nabla VER$")
+    ### WITH FILTER 
+    ### lfilter(b, a, dver_vz_z, axis=1)
+    # axt.plot(time, integrate.trapezoid(lfilter(AR.b, AR.a, AR.f_VER_1_27(AR.z_1_27_calc_m)[:,None]*np.gradient(vz_z[fi_50,:,:], AR.z_1_27_calc_m, axis=0), axis=1), AR.z_1_27_calc_m, axis=0) ,
+    #                  c="k", ls="-", label=r"Integrated, $\tau\;VER \;\nabla \cdot v_z$")
+    # axt.plot(time, integrate.trapezoid(lfilter(AR.b, AR.a,  np.gradient(AR.f_VER_1_27(AR.z_1_27_calc_m)[:,None]*vz_z[fi_50,:,:], AR.z_1_27_calc_m, axis=0), axis=1), AR.z_1_27_calc_m, axis=0), 
+    #                  c="k", ls="--", label=r"Integrated $\tau\;\nabla \cdot (VER \;v_z)$")
+    # axt.plot(time, integrate.trapezoid(   integrate.cumulative_trapezoid(vz_z[fi_50,:,:], time, axis=1, initial=0)  * AR.f_dVER_1_27(AR.z_1_27_calc_m)[:,None], AR.z_1_27_calc_m,axis=0),
+    #                  c="k", ls=":", label=r"$u_z \cdot \nabla VER$")
+    
+    axt.set_xlabel("Time / [$s$]")
+    axt.set_ylabel("Unfiltered intensity")
+    axt.legend(frameon=False, loc=1)
+    ###
+    fig.tight_layout()
+    # plt.show()
+    
 
 
+    ################################################################################################################
     ### HANDMADE CALCUATION (analytical sinusoid): 
+    ################################################################################################################    
     ### 0. Pick frequency 
-    f0 = 1/50
+    # f0s = 1/50
+    f0s = np.array([0.2,0.1,0.02, 0.01])
     ### 1. Make up an altitude range  
     zrange = np.linspace(90e3,120e3,100)
     ### 2. Get frequencies 
     ff = np.fft.fftfreq(Nt, d=dt)
     om = ff*(2*np.pi)
     ### 4. Get amplification, normalize by the value at 90 km: 
-    a_func = AR.f_amplification(zrange)[:,None]/AR.f_amplification(90e3)
-    ### 5. Defined derivative of tapered sinusoid (functions above) and normalize by amplitude 
-    tVEL = tapered_sinusoid(time[None,:], zrange[:,None], f0, c=c) * 5e-3
-    tVEL_dz = tapered_sinusoid_dz(time[None,:], zrange[:,None], f0, c=c) * 5e-3
-    print("Max of vel signal at z = 90 km: ", np.max(tVEL[0,:]))
-    ### 6. Get their fft
-    fftVEL = np.fft.fft(tVEL, axis=1)
-    fftVEL_dz = np.fft.fft(tVEL_dz, axis=1)
-    ### Calculate the desired dver in frequency domain (EQ 4.22): 
-    tau = 4460 # s 
-    fft_dver = -tau/(1+1j*om[None,:]*tau) * AR.f_VER_1_27(zrange)[:,None] * (fftVEL_dz*a_func  + fftVEL*np.gradient(a_func, zrange, axis=0) ) 
-    dver = np.fft.ifft(fft_dver, axis=1).real
-    
-
-    fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,8)) 
-    ### Original vel shape
-    iz = 0  
-    ### Propagated at 90 km 
-    ax2.plot(time, tVEL[iz,:], label="z = {:.1f} km".format(zrange[iz]))
-    ### Calculated VER 
-    ax3.plot(time, dver[iz,:]/AR.f_VER_1_27(zrange[iz])*100)
-    ### Integrated intensity 
-    I = np.trapz(dver, zrange, axis=0 )
+    a_func = AR.f_amplification(zrange)[:,None]/AR.f_amplification(hstart)
+    a_func2 = np.sqrt(AR.f_rho(90e3)/ (AR.f_rho(zrange)))   ### Alternative definition, without sound speed 
+    def calculate_airglow_sinusoid(f0):
+        ### 5. Defined derivative of tapered sinusoid (functions above) and normalize by amplitude 
+        tVEL = tapered_sinusoid(time[None,:], zrange[:,None], f0, c=c) * ampl_at_start 
+        tVEL_dz = tapered_sinusoid_dz(time[None,:], zrange[:,None], f0, c=c) * ampl_at_start 
+        print("Max. of velocity signal at z = 90 km: ", np.max(tVEL[0,:]))
+        ### 6. Get their fft
+        fftVEL = np.fft.fft(tVEL, axis=1)
+        fftVEL_dz = np.fft.fft(tVEL_dz, axis=1)
+        ### 7. Calculate the desired dver in frequency domain (EQ 4.22): 
+        tau = 4460 # s 
+        ### OPTION 1: Calculate analytical derivative of sine. Can cause problems due to tapering.
+        # fft_dver = -tau/(1+1j*om[None,:]*tau) * AR.f_VER_1_27(zrange)[:,None] * (fftVEL_dz*a_func  + fftVEL*np.gradient(a_func, zrange, axis=0) ) 
+        ### OPTION 2: Calculate gradient of vel manually: 
+        fft_dver = -tau/(1+1j*om[None,:]*tau) * AR.f_VER_1_27(zrange)[:,None] * (np.gradient(fftVEL, zrange, axis=0)*a_func  + fftVEL*np.gradient(a_func, zrange, axis=0) ) 
+        
+        dver = np.fft.ifft(fft_dver, axis=1).real
+        ### 8. Remove linear trend. 
+        start = dver[:,0][:,None]
+        end   = dver[:,50][:,None]
+        trend = np.linspace(0, 1, dver.shape[1])   
+        trend = start + (end - start)/(trend[50]-trend[0]) * trend  # shape (Nz, Nt)
+        dver = dver - trend
+        ### 9. Integrated intensity 
+        I = np.trapz(dver, zrange, axis=0 )
+        return(tVEL, dver, I)
     I_background = np.trapz(AR.f_VER_1_27(zrange), zrange, axis=0 )
-    ax4.plot(time, I/I_background)
 
-    ax2.set_ylabel("V_z at 90 km / [$s$]")
-    ax3.set_ylabel("VER perturbation at 90 km / [%]")
-    ax4.set_ylabel("Relative Intensity perturbation")
+
+    ################################################################################################################
+    fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,9)) 
+    cmap = plt.get_cmap("plasma")
+    cols = [cmap(i) for i in np.linspace(0.2, 0.8, f0s.size)]
+    ### Original vel shape
+    # iz = 0  
+    iz2 = np.argmin(abs(zrange-AR.z_1_27_calc_m[iz]))   ### To ensure we plot the same altitude as the other method 
+    ### Propagated at 90 km 
+    for fi, f0 in enumerate(f0s):
+        tVEL, dver, I = calculate_airglow_sinusoid(f0)
+
+        ### Starting waveform at 90 km 
+        ax2.plot(time, tVEL[iz2,:], c=cols[fi], label="f={:.3g} Hz, T={:.3g} s".format(f0, 1/f0))
+        if fi == f0s.size-1:
+            ax2.set_ylim(-1.5*ampl_at_start,1.5*ampl_at_start)
+        ### Calculated VER 
+        vmin = -np.max(np.abs(dver[iz2,:]))*1.1
+        vmax = np.max(np.abs(dver[iz2,:]))*1.1
+        ax3.plot(time, dver[iz2,:]/AR.f_VER_1_27(zrange[iz2])*100, c=cols[fi])
+        if fi == f0s.size-1:
+            ax3b = ax3.twinx() 
+            ax3b.plot(time, dver[iz2,:], ls=" ", color="w")    
+            ax3.set_ylim(vmin/AR.f_VER_1_27(zrange[iz2])*100, vmax/AR.f_VER_1_27(zrange[iz2])*100)
+            ax3b.set_ylim(vmin, vmax)
+        ### Integrated Intensity
+        imin = -np.max(np.abs(I))*1.1
+        imax = np.max(np.abs(I))*1.1
+        ax4.plot(time, I/I_background*100, c=cols[fi])
+        if fi== f0s.size-1:
+            ax4b = ax4.twinx() 
+            ax4b.plot(time, I*AR._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"), c="k", ls=" ")
+            ax4.set_ylim(imin/I_background*100, imax/I_background*100)
+            ax4b.set_ylim(imin*AR._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"), imax*AR._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"))
+    ###
+    ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$s$]")
+    ax3.set_ylabel("VER$_{1.27}$ pert. at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [%]")
+    ax3b.set_ylabel(r"VER$_{1.27}$ pert. at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$ph/m^3/s$]")
+    ax4.set_ylabel("Relative Intensity pert. [%]")
+    ax4b.set_ylabel("Intensity pert. [$Rayleigh$]")
     ax4.set_xlabel("Time / [$s$]")
     ax4.set_xlim(-10,tf)
     ax2.legend(frameon=False)
+    for ax in  [ax2, ax3, ax4, ax3b, ax4b]:
+        ax.ticklabel_format(style='sci', axis='y', scilimits=(-2, 2), useMathText=True)
+    ###
     fig.align_labels() 
+    fig.suptitle("Calculated with Homemade sine framework")
     fig.tight_layout()
+    ################################################################################################################
+    
+
+    ################################################################################################################
+    ### Calculate for T=50s 
+    tVEL, dver, I = calculate_airglow_sinusoid(1/50)
 
     fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
     ###
-    ax1.plot(AR.f_VER_1_27(zrange), zrange, c="k") 
+    ax1.plot(AR.f_VER_1_27(zrange), zrange/1e3, c="k") 
+    ax1b = ax1.twiny()
+    ax1b.plot(np.max(abs(dver), axis=1)/AR.f_VER_1_27(zrange)*100, zrange/1e3, c="r", label="Max Perturbation")
+    ax1b.set_xlabel(r"Max. VER$_{1.27}$ perturbation / [%]")
+    ax1b.xaxis.label.set_color('red')
     ax1.set_xlabel("VER / ph/m3/s")
     ax1.set_ylabel("Altitude / km")
+    ax1.set_xlim(0,5.5e11)
     ###
-    ax2.plot(AR.f_amplification(zrange)/AR.f_amplification(90e3), zrange, c="k") 
+    ax2.plot(AR.f_amplification(zrange)/AR.f_amplification(90e3), zrange/1e3, c="k", label=r"$\sqrt{\rho(90)c(90)/(\rho(z)c(z))}$") 
+    ax2.plot(a_func2, zrange/1e3, c="grey", ls="--", label=r"$\sqrt{\rho(90)/\rho(z)}$") 
     ax2.set_xlabel("Amplification with respect to 90 km")
+    ax2.legend(frameon=False, loc=4)
+    ax2.set_xlim(0,70)
     ###
-    im = ax3.pcolormesh(time, zrange/1e3, dver[:,:])
-    fig.colorbar(im, ax=ax3)
+    im = ax3.pcolormesh(time, zrange/1e3, dver[:,:], vmin=-np.max(np.abs(dver)), vmax=np.max(np.abs(dver)))
+    ax3.axhline(zrange[np.argmax(np.max(abs(dver), axis=1))]/1e3, c="w", ls=":", label="Maximum perturbation")
+    ax3.axhline(zrange[np.argmax(AR.f_VER_1_27(zrange))]/1e3, c="w", ls="--", label=r"Maximum VER$_{1.27}$")
+    fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{1.27}$ [$ph/m^3/s$]")
     ax3.set_xlabel("Time / [$s$]")
-    ax3.set_ylabel("Altitude / [$km$]")
+    leg = ax3.legend(frameon=False, loc=2)
+    for text in leg.get_texts():
+        text.set_color('w') # Set all legend text to green
+    # ax3.set_ylabel("Altitude / [$km$]")
     ax3.set_xlim(0,800)
     ax3.set_ylim(90,120)
+    for ax in [ax1,ax2,ax3]:
+        ax.set_ylim(90,120)
+    fig.suptitle("Calculated with Homemade sine framework")
+    fig.tight_layout()
     plt.show()
-
+    ################################################################################################################
+    
 
 
     quit()
