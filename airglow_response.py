@@ -413,6 +413,14 @@ loc_save = None
 itime_save = None
 gridded = None
 dir_save = None 
+phase = None
+dphase_dz = None
+ampl = None
+dampl_dz = None
+att = None
+datt_dz = None
+zatt = None
+zrange = None
 
 # =========================================================================================================
 ### Calculate theoretical arrival times for P, S and RW 
@@ -762,11 +770,13 @@ def _factor_W_to_Rayleigh(L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
 # =========================================================================================================
 def init_worker_nightlow(_list_of_locations, _fft_vzs, _fft_uzs, _att_exp, _amplification, _phase_shift_z,
                 _f_VER_1_27,_f_dVER_1_27, _z_1_27_calc_m, _fourier_filtering, _Nt, _fs, 
-                _b, _a, _loc_save, _itime_save, _gridded, _tf_phase_nightglow, _dir_save):
+                _b, _a, _loc_save, _itime_save, _gridded, _tf_phase_nightglow, _dir_save,
+                _phase, _dphase_dz, _ampl, _dampl_dz, _att, _datt_dz, _zatt, _zrange):
     global fft_vzs, fft_uzs, att_exp, amplification, phase_shift_z
     global f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, fourier_filtering, tf_phase_nightglow, Nt, fs
     global b, a
     global list_of_locations, loc_save, itime_save, gridded, dir_save
+    global phase, dphase_dz, ampl, dampl_dz, att, datt_dz, zatt, zrange
 
     list_of_locations = _list_of_locations
     fft_vzs = _fft_vzs
@@ -787,12 +797,20 @@ def init_worker_nightlow(_list_of_locations, _fft_vzs, _fft_uzs, _att_exp, _ampl
     gridded = _gridded
     tf_phase_nightglow = _tf_phase_nightglow
     dir_save = _dir_save
+    phase = _phase
+    dphase_dz = _dphase_dz
+    ampl = _ampl
+    dampl_dz = _dampl_dz
+    att = _att
+    datt_dz = _datt_dz
+    zatt = _zatt 
+    zrange = _zrange 
 
 
 def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, _phase_shift_z, _Nt,
-                _z_4_28_calc_m, _fac_temperature, _f_VER_4_28, _loc_save, _itime_save, _gridded, _dir_save):
+                _z_4_28_calc_m, _fac_temperature, _f_VER_4_28, _f_dVER_4_28, _loc_save, _itime_save, _gridded, _dir_save):
     global fft_uzs, att_exp, amplification, phase_shift_z, Nt
-    global z_4_28_calc_m, fac_temperature, f_VER_4_28
+    global z_4_28_calc_m, fac_temperature, f_VER_4_28, f_dVER_4_28
     global list_of_locations, loc_save, itime_save, gridded, dir_save
 
     list_of_locations = _list_of_locations
@@ -803,6 +821,7 @@ def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, 
     Nt = _Nt
     z_4_28_calc_m = _z_4_28_calc_m
     f_VER_4_28 = _f_VER_4_28
+    f_dVER_4_28 = _f_dVER_4_28
     fac_temperature = _fac_temperature
     loc_save = _loc_save
     itime_save = _itime_save
@@ -811,11 +830,11 @@ def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, 
 
 
 # =========================================================================================================
-### Function to propagate a group seismograms up in the atmosphere (simple model)
+### Function to propagate a group seismograms up in the atmosphere (simple model, only vertical vel coupling)
 def propagate_attenuate(fft, i_east, i_north, att, ampl, psz):
     ### Apply attenuation and amplification at all z 
     ### shape attenuation, phase_shift: (Nz, Nw). Shape velocity, fft: (Ne, Nn, Nz, Nw)
-    ### To properly account for the displacement (or velocity) steps, all time traces need to be padded in time beforehand
+    ### To properly account for the displacement (or velocity) steps, all time traces were zero-padded in time beforehand
 
     att_vz = fft[i_east, i_north, np.newaxis, :] * att
     ampl_vz_z = att_vz * ampl[:, np.newaxis]
@@ -826,13 +845,6 @@ def propagate_attenuate(fft, i_east, i_north, att, ampl, psz):
     ### Back to time domain: inverse FFT to get vz_z for these altitudes
     vz_z = np.real(sfft.ifft(fft_vz_z, axis=1))  # shape: (2, Nt)
 
-    ### Remove mean (to help filtering?) 
-    #vz_z -= np.mean(vz_z, axis=1)[:,np.newaxis]
-
-    ### Filter high frequency and low frequency 
-    #vz_z = butter_filter(vz_z, 1/0.5, 0.001, 0.1, axis=1)
-    #f = sfft.fftfreq(vz_z.shape[1], d=0.5)
-    #fft_vz_z *= butterworth_bandpass_response(f, 0.001, 0.1, 4)[np.newaxis, :]
 
     return(vz_z, fft_vz_z)
 
@@ -843,36 +855,47 @@ def velocity_to_dVER_nightglow(uz_z, vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, 
 
     fver_alt = f_VER_1_27(z_1_27_calc_m)[:,np.newaxis]
     fdver_alt = f_dVER_1_27(z_1_27_calc_m)[:,np.newaxis]
-    #print(fdver_alt)
 
-    ### Filter at all altitudes 
+    ### Filter at all altitudes
+    ### OPTION 1: USE A TIME-DOMAIN FILTER  
     if not fourier_filtering:
         ### Compute VER and its vertical gradient (numpy gradient) TIME DOMAIN 
-        # ver_vz = fver_alt * vz_z  # shape: (Nz, Nt)
-        ### VERSION WITH SMOOTH GRADIENT 
-        dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0) + fdver_alt*vz_z
-        ### VERSION OF PL 
-        #dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
-        ### VERSION OF BK 
-        #dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
 
-        dver_z = lfilter(b, a, dver_vz_z, axis=1)+ uz_z*fdver_alt
+        ### VERSION WITH SMOOTH GRADIENT -- WARNING: THIS VERSION YIELDS A NET ZERO INTENSITY WHEN USING ONLY VERTICAL GRADIENTS 
+        # dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0) + fdver_alt*vz_z
+        ### VERSION OF PL -- WARNING: THIS VERSION YIELDS A NET ZERO INTENSITY WHEN USING ONLY VERTICAL GRADIENTS 
+        # ver_vz = fver_alt * vz_z  # shape: (Nz, Nt)
+        # dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
+        ### Adding the advection term 
+        # dver_z = lfilter(b, a, dver_vz_z, axis=1) 
+        # dver_z += uz_z*fdver_alt
+
+        ### VERSION OF BK 
+        dver_vz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
+        ### VERSION OF BK, transformed by IPP  
+        ### Once integrated, it yields the same result, but the ver itself is inexact. 
+        # dver_vz_z = -fdver_alt * fft_vz_z
+        dver_z = lfilter(b, a, dver_vz_z, axis=1)
+
+    ### OPTION 1: USE A FREQUENCY-DOMAIN FILTER  
     else:
         ### Compute VER and its vertical gradient (numpy gradient) FOURIER DOMAIN 
-        #ver_vz = fver_alt * fft_vz_z  # shape: (Nz, Nt) 
-        ### SMOOTH GRADIENT 
+        
+        ### SMOOTH GRADIENT: WARNING: THIS VERSION YIELDS A NET ZERO INTENSITY WHEN USING ONLY VERTICAL GRADIENTS  
         # dver_vz_z = fver_alt * np.gradient(fft_vz_z, z_1_27_calc_m, axis=0) + fdver_alt*fft_vz_z       
-        ### VERSION OF PL 
+        ### VERSION OF PL: WARNING: THIS VERSION YIELDS A NET ZERO INTENSITY WHEN USING ONLY VERTICAL GRADIENTS 
+        # ver_vz = fver_alt * fft_vz_z  # shape: (Nz, Nt) 
         # dver_vz_z = np.gradient(ver_vz, z_1_27_calc_m, axis=0)
+        ### Adding the advection term : 
+        # dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real  
+        # dver_z +=  uz_z*fdver_alt
+
         ### VERSION OF BK 
         dver_vz_z = fver_alt * np.gradient(fft_vz_z, z_1_27_calc_m, axis=0)
         ### VERSION OF BK, transformed by IPP  
-        # dver_vz_z = fdver_alt * fft_vz_z
-
-        # dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real
-        ### Testing the advection term : we get u by integrating v in frequency 
-        dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real  + uz_z*fdver_alt
-        # dver_z = uz_z * fdver_alt
+        ### Once integrated, it yields the same result, but the ver itself is inexact. 
+        # dver_vz_z = -fdver_alt * fft_vz_z
+        dver_z = sfft.ifft(tf_phase_nightglow * dver_vz_z, axis=1).real
 
         ### Simple linear detrend 
         ### dver_z = signal.detrend(dver_z, type="linear", axis=1) ### way too slow 
@@ -883,7 +906,7 @@ def velocity_to_dVER_nightglow(uz_z, vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, 
         dver_z = dver_z - trend
     
     if test:
-        ### TEST 
+        ### TODO: REMOVE 
         ver_dvz_z = fver_alt * np.gradient(vz_z, z_1_27_calc_m, axis=0)
         dver_z2 = lfilter(b, a, ver_dvz_z, axis=1)
 
@@ -1001,26 +1024,21 @@ def velocity_to_dVER_nightglow(uz_z, vz_z, fft_vz_z, z_1_27_calc_m, f_VER_1_27, 
         ax2.set_title("VER*div(vz)")
         quit()
 
-    ### Ensure dVER starts at zero 
-    # dver_z -= dver_z[:,0][:,np.newaxis]
-
     return(dver_z)
 
 
 # =========================================================================================================
-### Function to transform velocity at a specific altitude into VER perturbation 
-def temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature):
+### Function to transform displacement at a specific altitude into VER perturbation 
+def temperature_perturbation_dayglow(uz_z, z_4_28_calc_m, fac_temperature):
 
     ### Divergence of U * temperature factor 
     dver_z = fac_temperature[:,None] * np.gradient(uz_z, z_4_28_calc_m, axis=0) 
-    ### Tet with P.Y. F. expression (here uz_z is actually v)
-    # dver_z = fac_temperature[:,None] * uz_z 
-
+    
     return(dver_z)
 
 
 # =========================================================================================================
-### Function to integrate over line of sight (simple model)
+### Function to integrate over line of sight (simple model, vertical LOS)
 def integrate_line_of_sight(dver_z, z_calc_m, wavelength):
     ### For now, the LOS is a simple vertical line 
     #amp_dayglow = np.trapz((dVER_ad+1*dVER_tr), x=alts_dayglow, axis=1)/np.trapz(f_VER_dayglow(alts_dayglow), x=alts_dayglow,)
@@ -1030,10 +1048,8 @@ def integrate_line_of_sight(dver_z, z_calc_m, wavelength):
     amp_airglow = np.trapz(dver_z, x=z_calc_m, axis=0) # /np.trapz(f_VER(alts_dayglow), x=alts_dayglow,)
 
     ### Convert to Rayleigh
-    #amp_airglow *= _factor_W_to_Rayleigh(wavelength, dir="Radiance_to_Rayleigh")  ### for VER in W/m3
-    amp_airglow *= _factor_W_to_Rayleigh(wavelength, dir="phRadiance_to_Rayleigh")  ### for VER in ph/s/m3
-
-    ### Can then be converted into total airglow luminosity by adding the integral of ver(z) 
+    #amp_airglow *= _factor_W_to_Rayleigh(wavelength, dir="Radiance_to_Rayleigh")  ### if VER was in W/m3
+    amp_airglow *= _factor_W_to_Rayleigh(wavelength, dir="phRadiance_to_Rayleigh")  ### if VER was in ph/s/m3
 
     return(amp_airglow)
 
@@ -1042,12 +1058,14 @@ def integrate_line_of_sight(dver_z, z_calc_m, wavelength):
 ### Wrapper function for calculating NIGHTglow at one location (outside of class to be parallelisable)
 # =========================================================================================================
 def nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, att_exp, amplification, phase_shift_z,f_VER_1_27, f_dVER_1_27,
-                        z_1_27_calc_m, fourier_filtering, Nt, fs, b,a, loc_save, itime_save, gridded, tf_phase_nightglow, dir_save):
+                        z_1_27_calc_m, fourier_filtering, Nt, fs, b,a, loc_save, itime_save, gridded, tf_phase_nightglow, dir_save,
+                        phase, dphase_dz, ampl, dampl_dz, att, datt_dz, zatt, zrange):
     
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
 
     # if (i_east, i_north) == loc_save[0]:
     #     print(i_en, i_east, i_north)
+    print(fft_vzs.shape)
     
     vz_z, fft_vz_z = propagate_attenuate(fft_vzs, i_east, i_north, att_exp, amplification, phase_shift_z)
     uz_z, fft_uz_z = propagate_attenuate(fft_uzs, i_east, i_north, att_exp, amplification, phase_shift_z)
@@ -1064,6 +1082,19 @@ def nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, att_exp, am
     # dver_z = butter_filter(dver_z, fs, 5e-3, None, axis=1, order=10)
     
     amp_nightglow = integrate_line_of_sight(dver_z, z_1_27_calc_m, 1.27)
+    ### Attempt: amplitude with a high resolution vertical integral     
+    # fft_dver = fft_vzs[i_east, i_north, None,:]*(dphase_dz*ampl*att + dampl_dz*phase*att + datt_dz*phase*ampl)*f_VER_1_27(zatt)
+    # fft_dver = fft_dver[-zrange.size:,:]
+    # ###
+    # I = integrate_line_of_sight(fft_dver*tf_phase_nightglow, z_1_27_calc_m, 1.27)
+    # I = np.fft.ifft(I).real
+    # ###
+    # start = I[0]
+    # end   = I[50]
+    # trend = np.linspace(0, 1, I.size)   
+    # trend = start + (end - start)/(trend[50]-trend[0]) * trend  # shape (Nz, Nt)
+    # amp_nightglow = I - trend
+
             
     ### Store wavefield info 
     # if gridded:
@@ -1085,7 +1116,7 @@ def nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, att_exp, am
 ### Wrapper function for calculating DAYglow at one location (outside of class to be parallelisable)
 # =========================================================================================================
 def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification, phase_shift_z, Nt,
-                        z_4_28_calc_m, fac_temperature, f_VER_4_28, loc_save, itime_save, gridded, dir_save):
+                        z_4_28_calc_m, fac_temperature, f_VER_4_28, f_dVER_4_28, loc_save, itime_save, gridded, dir_save):
     
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
 
@@ -1098,9 +1129,9 @@ def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification
     ### Ensure signal starts at 0 
     uz_z -= uz_z[:,0][:,None]
     ###
-    dver_z = temperature_perturbation(uz_z, z_4_28_calc_m, fac_temperature)
-    ### With advection of VER term (BK):
-    ad_ver = uz_z * np.gradient(f_VER_4_28(z_4_28_calc_m), z_4_28_calc_m)[:,None]
+    dver_z = temperature_perturbation_dayglow(uz_z, z_4_28_calc_m, fac_temperature)
+    ### Add advection of VER term (BK):
+    ad_ver = uz_z * f_dVER_4_28(z_4_28_calc_m)[:,None]
     dver_z += ad_ver
     ### 
     amp_dayglow = integrate_line_of_sight(dver_z, z_4_28_calc_m, 4.28)
@@ -1125,13 +1156,14 @@ def worker_func_nightglow(i):
     # location = list_of_locations[i]
     return nightglow_at_location(i, list_of_locations, fft_vzs, fft_uzs, att_exp, amplification, 
                                phase_shift_z, f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, 
-                               fourier_filtering, Nt, fs, b, a, loc_save, itime_save, gridded, tf_phase_nightglow, dir_save)
+                               fourier_filtering, Nt, fs, b, a, loc_save, itime_save, gridded, tf_phase_nightglow, dir_save,
+                               phase, dphase_dz, ampl, dampl_dz, att, datt_dz, zatt, zrange)
 
 
 def worker_func_dayglow(i):
     # location = list_of_locations[i]
     return dayglow_at_location(i, list_of_locations, fft_uzs, att_exp, amplification, 
-                               phase_shift_z, Nt, z_4_28_calc_m, fac_temperature, f_VER_4_28, 
+                               phase_shift_z, Nt, z_4_28_calc_m, fac_temperature, f_VER_4_28, f_dVER_4_28,
                                loc_save, itime_save, gridded, dir_save)
 
 
@@ -1181,11 +1213,11 @@ class AirglowSignal:
             self.f_alpha, self.f_alpha_2d, self.f_amplification = self._load_absorption_amplification(dir_attenuation_GA=dir_attenuation_GA, do_plot=do_plot, disable_att = disable_att)
 
         ### Definitions for the calculation of 1_27 micrometer nightglow 
-        self.tau = 4460 # s
+        self.tau = 4460  # s ### VERY IMPORTANT: decay time of excited oxygen 
         self.b, self.a = self._def_filter_nightglow()
         self.Nz = Nz    # Number of altitude points for gradients and integrations. 
         # self.z_1_27_calc_m = np.linspace(self.z_1_27_min, self.z_1_27_max, self.Nz)  # in meters, always 
-        self.z_1_27_calc_m = np.linspace(70e3, 150e3, self.Nz)  # in meters, always 
+        self.z_1_27_calc_m = np.linspace(80e3, 140e3, self.Nz)  # in meters, always 
         self.z_1_27_calc_km = self.z_1_27_calc_m / 1e3        
         self.dz_1_27_m = np.diff(self.z_1_27_calc_m)[0]
         ### For calculation of cumulated attenuation: 
@@ -1194,7 +1226,8 @@ class AirglowSignal:
 
         ### Definitions for the calculation of 4_28 micrometer nightglow         
         self.alpha_t = 0.01    ### VERY IMPORTANT: 1% sensitivity to temperature variations 
-        self.z_4_28_calc_m = np.linspace(self.z_4_28_min, self.z_4_28_max, self.Nz)  # in meters, always 
+        # self.z_4_28_calc_m = np.linspace(self.z_4_28_min, self.z_4_28_max, self.Nz)  # in meters, always
+        self.z_4_28_calc_m = np.linspace(110e3, 160e3, self.Nz)  # in meters, always  
         self.z_4_28_calc_km = self.z_4_28_calc_m / 1e3        
         self.dz_4_28_m = np.diff(self.z_4_28_calc_m)[0]
         ### For calculation of cumulated attenuation: 
@@ -1682,18 +1715,29 @@ class AirglowSignal:
         # freqsi = sfft.fftfreq(d=self.dt, n=self.Nt)
         freqsi = sfft.fftfreq(d=self.dt, n=Ntpad)
         freqsp = abs(freqsi)
-
+    
         ### Pre-calculate the phase shift corresponding to the delay with altitude 
+        # self.phase_shift_z = np.zeros((self.Nz, self.Nt), dtype = np.complex64)
         self.phase_shift_z = np.zeros((self.Nz, Ntpad), dtype = np.complex64)
         ### Integrated travel time from zero to airglow altitudes 
-        self.travel_time = self.dz_1_27_m * np.cumsum(1/self.f_c(self.z_att_1_27_m))
+        self.travel_time = integrate.cumulative_trapezoid(1/self.f_c(self.z_att_1_27_m), self.z_att_1_27_m)
         self.travel_time = self.travel_time[-self.Nz:]
-        for jz, zz in enumerate(self.z_1_27_calc_m):
-            ### Constant propagation velocity og 300 m/s
-            #self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * zz / 0.3)
-
+        for jz in range(self.Nz):
             ### Integrated propagation velocity from zero to altitude z  
             self.phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * self.travel_time[jz] )
+
+        ### Enforce Hermitian symmetry explicitly (works for odd/even N)
+        if Ntpad % 2 == 0:
+            pos = np.arange(1, Ntpad//2)        # 1..(N/2-1)
+            self.phase_shift_z[:, 0] = self.phase_shift_z[:, 0].real
+            self.phase_shift_z[:, Ntpad//2] = self.phase_shift_z[:, Ntpad//2].real
+        else:
+            pos = np.arange(1, (Ntpad-1)//2 + 1)  # 1..(N-1)//2
+            self.phase_shift_z[:, 0] = self.phase_shift_z[:, 0].real
+        neg = (-pos) % Ntpad
+        self.phase_shift_z[:, neg] = np.conj(self.phase_shift_z[:, pos])
+
+
 
         ### If using fourier filtering, prepare the filter: 
         if fourier_filtering:
@@ -1723,7 +1767,7 @@ class AirglowSignal:
         ### NOTE: Cumulative sum works only if we are starting from z=0
         FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_1_27_m)
         attenuation = self.f_alpha_2d((ZZver2, FFver))
-        att_exp = np.exp(-self.dz_1_27_m*np.cumsum(attenuation, axis=0))   ### Supposes Np/m 
+        att_exp = np.exp(-integrate.cumulative_trapezoid(attenuation, self.z_att_1_27_m, axis=0))   ### Supposes Np/m 
         self.att_exp = att_exp[-self.Nz:]
         # fig, ax = plt.subplots() 
         # for i in range(self.Nz):
@@ -1732,6 +1776,30 @@ class AirglowSignal:
         ### Prepare the loop 
         list_of_locations = list(zip(list_ieast, list_inorth))
         list_indices = range(len(list_of_locations))
+
+        ### ATTEMPT: Calculate nightglow intensity faster with high resolution integral. 
+        # zrange = np.linspace(90e3,140e3,1000)
+        # zatt = np.concatenate((np.linspace(0,zrange[0]-1e3,100),zrange))
+        # phase = np.exp(-2*1j*np.pi*freqsi[None,:]*integrate.cumulative_trapezoid(1/self.f_c(zatt), zatt, initial=0)[:,None])
+        # dphase_dz = -2*1j*np.pi*freqsi[None,:]*1/self.f_c(zatt)[:,None]*phase 
+        # ###
+        # ampl = self.f_amplification(zatt)[:,None]
+        # dampl_dz = np.gradient(ampl, zatt, axis=0)
+        # ###
+        # FFver, ZZver2 = np.meshgrid(freqsp, zatt)
+        # attenuation = self.f_alpha_2d((ZZver2, FFver))
+        # att = np.exp(-integrate.cumulative_trapezoid(attenuation, zatt, axis=0, initial=0))
+        # datt_dz = -attenuation*att
+
+        # print(datt_dz.shape)
+        # print(att.shape)
+        # print(phase.shape)
+        # print(dphase_dz.shape)
+        # print(fft_vzs.shape)
+        # print(ampl.shape)
+        # print(dampl_dz.shape)
+        # quit()
+
 
         ### SERIAL VERSION OF THE CALCULATION 
         if not do_parallel: 
@@ -1746,7 +1814,8 @@ class AirglowSignal:
                 vz_z_it, dver_z_it, amp_nightglow_it = nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, self.att_exp, self.amplification, 
                                                                           self.phase_shift_z,self.f_VER_1_27,self.f_dVER_1_27,
                                                                         self.z_1_27_calc_m, fourier_filtering, self.Nt, 1/self.dt,self.b, self.a, 
-                                                                        loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow, dir_save)
+                                                                        loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow, dir_save,
+                                                                        phase, dphase_dz, ampl, dampl_dz, att, datt_dz, zatt, zrange)
                 
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
                 save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
@@ -1875,20 +1944,12 @@ class AirglowSignal:
         ### Grid of amplification 
         self.amplification = self.f_amplification(self.z_4_28_calc_m)
 
-        ### Grid of attenuation: OPTION WITHOUT CUMULATIVE SUM 
-        #FFver, ZZver = np.meshgrid(freqsp, self.z_1_27_calc_km)
-        #attenuation = self.f_alpha_2d((ZZver, FFver))
-        ### Exponential of attenuation (supposing Np/km)
-        #self.att_exp = np.exp(-self.z_1_27_calc_km[:,np.newaxis]*attenuation)   ### meter or kilometer ? Cumulative sum or not ? 
-
         ### NOTE: Cumulative sum works only if we are starting from z=0
         FFver, ZZver2 = np.meshgrid(freqsp, self.z_att_4_28_m)
         attenuation = self.f_alpha_2d((ZZver2, FFver))
-        att_exp = np.exp(-self.dz_4_28_m*np.cumsum(attenuation, axis=0))   ### Supposes Np/m 
+        # att_exp = np.exp(-self.dz_4_28_m*np.cumsum(attenuation, axis=0))   ### Supposes Np/m 
+        att_exp = np.exp(-integrate.cumulative_trapezoid(attenuation, self.z_att_4_28_m, axis=0))
         self.att_exp = att_exp[-self.Nz:]
-        # fig, ax = plt.subplots() 
-        # for i in range(self.Nz):
-        #     ax.plot(freqsp, self.att_exp[i,:])    
 
         ### Temperature factor: 
         # dVER_dayglow = self.alpha * self.f_VER_4_28(alt)*(self.f_gamma(alt)-1)*self.f_t(alt)*np.gradient(uz)
@@ -1911,7 +1972,7 @@ class AirglowSignal:
             for i_en in tqdm(list_indices, total=len(list_ieast), disable=False):
                 # i_en = 3360
                 uz_z_it, dver_z_it, amp_dayglow_it = dayglow_at_location(i_en, list_of_locations, fft_uzs, self.att_exp, self.amplification, 
-                                                                          self.phase_shift_z, self.Nt, self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, 
+                                                                          self.phase_shift_z, self.Nt, self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, self.f_dVER_4_28, 
                                                                           loc_save_idx, itime_save, self.gridded, dir_save)
                 
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
@@ -1931,7 +1992,7 @@ class AirglowSignal:
             with get_context("fork").Pool(processes=n_cpus,
                                             initializer=init_worker_dayglow,
                                             initargs=(list_of_locations, fft_uzs, self.att_exp, self.amplification, self.phase_shift_z, self.Nt,
-                                                    self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, loc_save_idx, itime_save, self.gridded, dir_save)
+                                                    self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, self.f_dVER_4_28, loc_save_idx, itime_save, self.gridded, dir_save)
                                                 ) as p:
                 
                 results = list(tqdm(p.imap(worker_func_dayglow, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
@@ -2760,7 +2821,7 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
 
     ### Now, we will calculate the AIRGLOW at every loc of the grid
     ### We first load the airglow class
-    AIRGLOW = AirglowSignal(SEISMO)
+    AIRGLOW = AirglowSignal(SEISMO, Nz=400)
 
     if effect=="ampl":
         ### We open various atmospheric profiles for density
@@ -2943,25 +3004,28 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
 # =========================================================================================================
 ### Some verifications 
 # =========================================================================================================
-def check_simple_perturbation():
+def check_simple_perturbation_nightglow():
     ### As in Balthasar Kenda's thesis, we send a sinusoidal perturbation with amplitude defined at 90 km 
 
     freq = np.array([0.2,0.1,0.02, 0.01]) ### Hz
+    # freq = np.array([0.4,0.2,0.1]) ### Hz
     # freq = np.array([0.01]) ### Hz
-    c = 200      ### m/s
-    dt = 0.1     ## s
-    tf = 1000  ## s
-    hstart = 90e3  ### m   ### To test BK 
-    # hstart = 100e3  ### m   ### To test Sutin 
-    ampl_at_start = 5e-3   ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda) 
-    # ampl_at_start = 4e-2   ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin) 
+    c = 200                 ### m/s
+    dt = 0.1                ### s
+    tf = 1000               ### s
+    hstart = 90e3           ### m   ### To test Kenda 2018 
+    ampl_at_start = 5e-3    ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda 2018) 
+    # hstart = 100e3          ### m   ### To test Sutin 2018
+    # ampl_at_start = 4e-2    ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin 2018) 
 
     time = np.arange(-tf/10, tf, dt)
     Nt = time.size
     VEL = np.zeros((1,freq.size, Nt))
     DIS = np.zeros((1,freq.size, Nt))
 
+
     def tapered_sinusoid(t, z, f0, c=200):
+        ### Tapered sinusoid propagating at speed c 
         sig = np.sin(2*np.pi*f0*(t - z/c))
         Nsine = int((1/f0)/dt)
         tp = tukey(Nsine, alpha=0.0)
@@ -2980,6 +3044,7 @@ def check_simple_perturbation():
         return(sig)
     
     def tapered_sinusoid_dz(t, z, f0, c=200):
+        ### Vertical gradient of tapered sinusoid 
         sig = -2*np.pi*f0/c*np.cos(2*np.pi*f0*(t - z/c))
         Nsine = int((1/f0)/dt)
         tp = tukey(Nsine, alpha=0.0)
@@ -2999,9 +3064,28 @@ def check_simple_perturbation():
             sig -= np.mean(sig, axis=1)[:,None]
         return(sig)
 
+    def tapered_sinusoid_dt(t, z, f0, c=200):
+        ### Time derivative of tapered sinusoid
+        sig = 2*np.pi*f0*np.cos(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.0)
+        
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+            sig*=tap
+            sig -= np.mean(sig)
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+                sig[i,:]*=tap
+            sig -= np.mean(sig, axis=1)[:,None]
+        return(sig)
 
-    # print(hstart+np.linspace(-1,1,11))
-    # ### To verify that the signal and its derivative is calculated corectly
+    ### To verify that the signal and its derivative is calculated corectly
     # fig, ax = plt.subplots() 
     # for fi, f in enumerate(freq):
     #     ax.plot(time, VEL[0,fi,:])
@@ -3033,18 +3117,29 @@ def check_simple_perturbation():
              "gridded": False, 
     }
 
+    ################################################################################################################
+    ### FRAMEWORK CALCUATION (using above classes): 
+    ################################################################################################################    
     AR = AirglowSignal(SEISMO, Nz = 40, do_plot=False, disable_att=True)
-    ### Disabled attenuation 
+    ### Attenuation is disabled, as in BK  
+    ### Wavelength of ver: 
+    lambda_min = np.min(AR.f_c(AR.z_1_27_calc_m))/max(freq)
+    dz_min = AR.dz_1_27_m
+    print("Min wavelength of VER = {:.1f} m".format(lambda_min))
+    print("Min vertical resolution = {:.1f} m".format(dz_min))
+    if lambda_min<=2*dz_min:
+        print("WARNING: vertical resolution of integration might be insufficient for desired frequency")
 
     ### To concord with BK, the amplitude of the wave must be 5 mm/s at 90 km. 
     ### We therefore rescale VEL using the amplification function 
     AR.VEL = AR.VEL * ampl_at_start/AR.f_amplification(hstart)
     AR.DIS = AR.DIS * ampl_at_start/AR.f_amplification(hstart)
-    ### Compute airglow 
+
+    ### Calculation of Airglow using the above framework  
     list_inorth, list_ieast = AR.iNN, AR.iEE
     AR.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[], time_save = time, fourier_filtering=True, 
                                do_parallel=False, dir_save="./results_test/")
-    
+    ### Load saved data 
     dat = np.load("results_test/nightglow_dver_t.npy")
     dati = np.load("results_test/nightglow_I_t.npy")
     vz_z = dat[0,:,:,:,0]
@@ -3053,7 +3148,16 @@ def check_simple_perturbation():
     iz = np.argmin(abs(AR.z_1_27_calc_m - hstart))
     print("Altitude of : ", iz, AR.z_1_27_calc_m[iz] )
 
+    ### TEST RESOLUTION 
+    # fig, ax = plt.subplots() 
+    # for j in range(AR.Nz):
+    #     ax.plot(time, ver_z[0,j,:]/abs(ver_z[0,j,:]).max() + 2*j, c="k")
+    # ax.plot(time, np.sum(ver_z[0,:,:]/np.max(abs(ver_z[0,:,:]), axis=1)[:,None], axis=0) + 2*j+2, c="r")
+    # plt.show()
 
+
+    ################################################################################################################
+    ### Show waveforms at different frequencies 
     ################################################################################################################
     fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,9)) 
     cmap = plt.get_cmap("plasma")
@@ -3068,7 +3172,7 @@ def check_simple_perturbation():
         ### Calculated VER 
         vmin = -np.max(np.abs(ver_z[fi,iz,:]))*1.1
         vmax = np.max(np.abs(ver_z[fi,iz,:]))*1.1
-        print(vmin, vmax)
+        # print(vmin, vmax)
         ax3.plot(time, ver_z[fi,iz,:]/AR.f_VER_1_27(AR.z_1_27_calc_m[iz])*100, c=cols[fi])
         if fi == freq.size-1:
             ax3b = ax3.twinx() 
@@ -3086,7 +3190,7 @@ def check_simple_perturbation():
             ax4.set_ylim(imin/AR.I_background_nightglow*100, imax/AR.I_background_nightglow*100)
             ax4b.set_ylim(imin, imax)
     ###
-    ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(AR.z_1_27_calc_m[iz]/1e3) + r" / [$s$]")
+    ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(AR.z_1_27_calc_m[iz]/1e3) + r" / [$m/s$]")
     ax3.set_ylabel("VER$_{1.27}$ pert. at " + "{:.1f} km".format(AR.z_1_27_calc_m[iz]/1e3) + r" / [%]")
     ax3b.set_ylabel(r"VER$_{1.27}$ pert. at " + "{:.1f} km".format(AR.z_1_27_calc_m[iz]/1e3) + r" / [$ph/m^3/s$]")
     ax4.set_ylabel("Relative Intensity pert. [%]")
@@ -3098,13 +3202,15 @@ def check_simple_perturbation():
         ax.ticklabel_format(style='sci', axis='y', scilimits=(-2, 2), useMathText=True)
     ###
     fig.align_labels() 
-    fig.suptitle("Calculated with Airglow framework")
+    fig.suptitle("NIGHTGLOW, calculated with Airglow framework")
     fig.tight_layout()
     ################################################################################################################
 
 
     
 
+    ################################################################################################################
+    ### Calculate dVER for sinusoid of 50 s 
     ################################################################################################################
     fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
     fi_50 = 2
@@ -3136,11 +3242,15 @@ def check_simple_perturbation():
     ax3.set_ylim(90,120)
     for ax in [ax1,ax2,ax3]:
         ax.set_ylim(90,120)
-    fig.suptitle("Calculated with Airglow framework")
+    fig.suptitle("NIGHTGLOW, calculated with Airglow framework")
     fig.tight_layout()
     ################################################################################################################
 
+
+
+    ################################################################################################################
     ### PLOTTING THE DIFFERENT DIVERGENCE TERMS
+    ################################################################################################################
     tp = 440 
     it = np.argmin(abs(time-tp))
     fig, (ax, axt) = plt.subplots(1,2,figsize=(8,7)) 
@@ -3188,41 +3298,91 @@ def check_simple_perturbation():
     # f0s = 1/50
     f0s = np.array([0.2,0.1,0.02, 0.01])
     ### 1. Make up an altitude range  
-    zrange = np.linspace(90e3,120e3,100)
+    zrange = np.linspace(80e3,140e3,400)
     ### 2. Get frequencies 
     ff = np.fft.fftfreq(Nt, d=dt)
     om = ff*(2*np.pi)
     ### 4. Get amplification, normalize by the value at 90 km: 
     a_func = AR.f_amplification(zrange)[:,None]/AR.f_amplification(hstart)
     a_func2 = np.sqrt(AR.f_rho(90e3)/ (AR.f_rho(zrange)))   ### Alternative definition, without sound speed 
-    def calculate_airglow_sinusoid(f0):
-        ### 5. Defined derivative of tapered sinusoid (functions above) and normalize by amplitude 
-        tVEL = tapered_sinusoid(time[None,:], zrange[:,None], f0, c=c) * ampl_at_start 
-        tVEL_dz = tapered_sinusoid_dz(time[None,:], zrange[:,None], f0, c=c) * ampl_at_start 
-        print("Max. of velocity signal at z = 90 km: ", np.max(tVEL[0,:]))
-        ### 6. Get their fft
-        fftVEL = np.fft.fft(tVEL, axis=1)
-        fftVEL_dz = np.fft.fft(tVEL_dz, axis=1)
-        ### 7. Calculate the desired dver in frequency domain (EQ 4.22): 
-        tau = 4460 # s 
-        ### OPTION 1: Calculate analytical derivative of sine. Can cause problems due to tapering.
-        # fft_dver = -tau/(1+1j*om[None,:]*tau) * AR.f_VER_1_27(zrange)[:,None] * (fftVEL_dz*a_func  + fftVEL*np.gradient(a_func, zrange, axis=0) ) 
-        ### OPTION 2: Calculate gradient of vel manually: 
-        fft_dver = -tau/(1+1j*om[None,:]*tau) * AR.f_VER_1_27(zrange)[:,None] * (np.gradient(fftVEL, zrange, axis=0)*a_func  + fftVEL*np.gradient(a_func, zrange, axis=0) ) 
+
+    ### Function to generate a sinusoid at a specific frequency and its dVER 
+    # def calculate_airglow_sinusoid(f0):
+    #     ### 5. Defined derivative of tapered sinusoid (functions above) and normalize by amplitude 
+    #     tVEL = tapered_sinusoid(time[None,:], zrange[:,None], f0, c=c) * ampl_at_start 
+    #     tVEL_dz = tapered_sinusoid_dz(time[None,:], zrange[:,None], f0, c=c) * ampl_at_start 
+    #     print("Max. of velocity signal at z = 90 km: ", np.max(tVEL[0,:]))
+
+    #     ### 6. Get their fft
+    #     fftVEL = np.fft.fft(tVEL, axis=1)
+    #     fftVEL_dz = np.fft.fft(tVEL_dz, axis=1)
+
+    #     ### 7. Calculate the desired dver in frequency domain (EQ 4.22): 
+    #     tau = 4460 # s 
+
+    #     ### OPTION 1: Calculate analytical derivative of sine. Can cause problems due to tapering.
+    #     # fft_dver = -tau/(1+1j*om[None,:]*tau) * AR.f_VER_1_27(zrange)[:,None] * (fftVEL_dz*a_func  + fftVEL*np.gradient(a_func, zrange, axis=0) ) 
+    #     ### OPTION 2: Calculate gradient of vel manually: 
+    #     fft_dver = -tau/(1+1j*om[None,:]*tau) * AR.f_VER_1_27(zrange)[:,None] * (np.gradient(fftVEL, zrange, axis=0)*a_func  + fftVEL*np.gradient(a_func, zrange, axis=0) ) 
         
-        dver = np.fft.ifft(fft_dver, axis=1).real
-        ### 8. Remove linear trend. 
+    #     ### 8. Back to time domain 
+    #     dver = np.fft.ifft(fft_dver, axis=1).real
+
+    #     ### 9. Remove linear trend. 
+    #     start = dver[:,0][:,None]
+    #     end   = dver[:,50][:,None]
+    #     trend = np.linspace(0, 1, dver.shape[1])   
+    #     trend = start + (end - start)/(trend[50]-trend[0]) * trend  # shape (Nz, Nt)
+    #     dver = dver - trend
+
+    #     ### 10. Integrated intensity 
+    #     I = np.trapz(dver, zrange, axis=0 )
+    #     return(tVEL, dver, I)
+    # I_background = np.trapz(AR.f_VER_1_27(zrange), zrange, axis=0 )
+
+
+    ### Even simpler method: define derivative of sinusoid explicitely 
+    zatt = np.concatenate((np.linspace(0,zrange[0]-1e3,200),zrange))
+    phase = np.exp(-2*1j*np.pi*ff[None,:]*integrate.cumulative_trapezoid(1/AR.f_c(zatt), zatt, initial=0)[:,None])
+    dphase_dz = -2*1j*np.pi*ff[None,:]*1/AR.f_c(zatt)[:,None]*phase 
+    ###
+    ampl = AR.f_amplification(zatt)[:,None]/AR.f_amplification(hstart)
+    dampl_dz = np.gradient(ampl, zatt, axis=0) 
+    
+    def calculate_airglow_sinusoid(f0):
+        tVEL = tapered_sinusoid(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start 
+        fftVEL = np.fft.fft(tVEL, axis=1)
+        ### VEL(z,f) = VEL(0,f)*exp(-2*1j*pi*f*int_0_z(1/c dz))*exp(-int_0_z(alpha dz)*ampl(z))
+        ### dVEL(z,f)_dz = VEL(0,f)*(dphase_dz⋅ampl⋅att + dampl_dz⋅phase⋅att + datt_dz⋅phase⋅ampl)
+        fft_dver = fftVEL*(dphase_dz*ampl + dampl_dz*phase)*AR.f_VER_1_27(zatt)[:,None]
+        fft_dver = fft_dver[-zrange.size:,:]
+        ###
+        tVEL = np.fft.ifft(fftVEL*(dphase_dz*ampl + dampl_dz*phase), axis=1).real
+        ###
+        tau = 4460 # s 
+        dver = np.fft.ifft(fft_dver*-tau/(1+1j*om[None,:]*tau), axis=1).real
+        ###
+        I = np.trapz(fft_dver, zrange, axis=0 )
+        I = np.fft.ifft(I*-tau/(1+1j*om*tau)).real
+        ### 9. Remove linear trend. 
         start = dver[:,0][:,None]
         end   = dver[:,50][:,None]
         trend = np.linspace(0, 1, dver.shape[1])   
         trend = start + (end - start)/(trend[50]-trend[0]) * trend  # shape (Nz, Nt)
         dver = dver - trend
-        ### 9. Integrated intensity 
-        I = np.trapz(dver, zrange, axis=0 )
+        ###
+        start = I[0]
+        end   = I[50]
+        trend = np.linspace(0, 1, I.size)   
+        trend = start + (end - start)/(trend[50]-trend[0]) * trend  # shape (Nz, Nt)
+        I = I - trend
+        ###
         return(tVEL, dver, I)
     I_background = np.trapz(AR.f_VER_1_27(zrange), zrange, axis=0 )
 
 
+    ################################################################################################################
+    ### Show waveforms at different frequencies 
     ################################################################################################################
     fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,9)) 
     cmap = plt.get_cmap("plasma")
@@ -3257,7 +3417,7 @@ def check_simple_perturbation():
             ax4.set_ylim(imin/I_background*100, imax/I_background*100)
             ax4b.set_ylim(imin*AR._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"), imax*AR._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"))
     ###
-    ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$s$]")
+    ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$m/s$]")
     ax3.set_ylabel("VER$_{1.27}$ pert. at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [%]")
     ax3b.set_ylabel(r"VER$_{1.27}$ pert. at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$ph/m^3/s$]")
     ax4.set_ylabel("Relative Intensity pert. [%]")
@@ -3269,13 +3429,14 @@ def check_simple_perturbation():
         ax.ticklabel_format(style='sci', axis='y', scilimits=(-2, 2), useMathText=True)
     ###
     fig.align_labels() 
-    fig.suptitle("Calculated with Homemade sine framework")
+    fig.suptitle("NIGHTGLOW, calculated with Homemade sine framework")
     fig.tight_layout()
     ################################################################################################################
     
 
     ################################################################################################################
     ### Calculate for T=50s 
+    ################################################################################################################
     tVEL, dver, I = calculate_airglow_sinusoid(1/50)
 
     fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
@@ -3308,19 +3469,395 @@ def check_simple_perturbation():
     ax3.set_ylim(90,120)
     for ax in [ax1,ax2,ax3]:
         ax.set_ylim(90,120)
-    fig.suptitle("Calculated with Homemade sine framework")
+    fig.suptitle("NIGHTGLOW, calculated with Homemade sine framework")
     fig.tight_layout()
-    plt.show()
+    # plt.show()
     ################################################################################################################
     
 
+def check_simple_perturbation_dayglow():
+    ### As in Balthasar Kenda's thesis, we send a sinusoidal perturbation with amplitude defined at 90 km 
 
-    quit()
+    freq = np.array([0.2,0.1,0.02, 0.01]) ### Hz
+    # freq = np.array([0.01]) ### Hz
+    c = 200                ### m/s
+    dt = 0.1               ### s
+    tf = 1000              ### s
+    hstart = 90e3  ### m   ### To test BK 
+    ampl_at_start = 5e-3   ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda) 
+
+    time = np.arange(-tf/10, tf, dt)
+    Nt = time.size
+    VEL = np.zeros((1,freq.size, Nt))
+    DIS = np.zeros((1,freq.size, Nt))
+
+    def tapered_sinusoid(t, z, f0, c=200):
+        ### Tapered sinusoid propagating at speed c 
+        sig = np.sin(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.0)
+
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+            sig*=tap
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+                sig[i,:]*=tap
+        return(sig)
+    
+    def tapered_sinusoid_dz(t, z, f0, c=200):
+        ### Vertical gradient of tapered sinusoid 
+        sig = -2*np.pi*f0/c*np.cos(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.0)
+        
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+            sig*=tap
+            sig -= np.mean(sig)
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+                sig[i,:]*=tap
+            sig -= np.mean(sig, axis=1)[:,None]
+        return(sig)
+
+    def tapered_sinusoid_dt(t, z, f0, c=200):
+        ### Time derivative of tapered sinusoid
+        sig = 2*np.pi*f0*np.cos(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.0)
+        
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+            sig*=tap
+            sig -= np.mean(sig)
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+                sig[i,:]*=tap
+            sig -= np.mean(sig, axis=1)[:,None]
+        return(sig)
+
+    ### To verify that the signal and its derivative is calculated corectly
+    # fig, ax = plt.subplots() 
+    # for fi, f in enumerate(freq):
+    #     ax.plot(time, VEL[0,fi,:])
+    #     # ax.plot(time, tapered_sinusoid(time, hstart, f), ls="--")
+    #     ax.plot(time, tapered_sinusoid_dz(time, hstart, f), ls="--")
+    #     ax.plot(time, np.gradient( tapered_sinusoid(time[None,:], hstart+np.linspace(-1e2,1e2,11)[:,None], f), hstart+np.linspace(-1e2,1e2,11), axis=0 )[5,:] , ls=":")
+    # plt.show() 
+    # quit()
 
 
+    ### Construct ground sinusoid for our own framework: 
+    for fi, f0 in enumerate(freq):
+        VEL[0,fi,:] = tapered_sinusoid_dt(time, 0e3, f0, c=c)
+        DIS[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
+    ### Normalize velocity and displacement so that max(VEL)=1
+    tvmax = np.max(np.abs(VEL), axis=2)
+    VEL=VEL/tvmax[:,:,None] 
+    DIS=DIS/tvmax[:,:,None] 
+
+    north_shifts = freq 
+    east_shifts = np.array([0. for i in range(north_shifts.size)])
+
+    SEISMO ={"dt": dt,
+             "t_new": time,
+             "Nt": Nt,
+             "VEL": VEL, 
+             "DIS": DIS,
+             "Nn" : north_shifts.size,  
+             "Ne" : 1 ,
+             "EE": east_shifts, 
+             "NN" : north_shifts,
+             "iEE" : [0 for i in freq],
+             "iNN" : range(north_shifts.size),
+             "gridded": False, 
+    }
+
+    ################################################################################################################
+    ### FRAMEWORK CALCUATION (using above classes): 
+    ################################################################################################################    
+    AR = AirglowSignal(SEISMO, Nz = 80, do_plot=False, disable_att=False)
+    ### We keep attenuation this time, as in BK 
+
+    ### To concord with BK, the amplitude of the wave must be 5 mm/s at 90 km. 
+    ### We therefore rescale VEL using the amplification function 
+    AR.VEL = AR.VEL * ampl_at_start/AR.f_amplification(hstart)
+    AR.DIS = AR.DIS * ampl_at_start/AR.f_amplification(hstart)
+
+    ### Calculation of Airglow using the above framework  
+    list_inorth, list_ieast = AR.iNN, AR.iEE
+    AR.calculate_4_28_airglow(list_ieast, list_inorth, loc_save_idx=[], time_save = time, 
+                               do_parallel=False, dir_save="./results_test/")
+    ### Load saved data 
+    dat = np.load("results_test/dayglow_dver_t.npy")
+    dati = np.load("results_test/dayglow_I_t.npy")
+    vz_z = dat[0,:,:,:,0]
+    ver_z = dat[0,:,:,:,1]
+    I1 = dati[0,:,:]
+    iz = np.argmin(abs(AR.z_4_28_calc_m - hstart))
+    print("Altitude of : ", iz, AR.z_4_28_calc_m[iz] )
+
+    ################################################################################################################
+    fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,9)) 
+    cmap = plt.get_cmap("plasma")
+    cols = [cmap(i) for i in np.linspace(0.2, 0.8, freq.size)]
+    ### Propagated at 90 km 
+    for fi, f in enumerate(freq):
+
+        ### Starting waveform at 90 km 
+        ax2.plot(time, np.gradient(vz_z[fi,iz,:], time), c=cols[fi], label="f={:.3g} Hz, T={:.3g} s".format(f, 1/f))
+        if fi == freq.size-1:
+            ax2.set_ylim(-1.5*ampl_at_start,1.5*ampl_at_start)
+        ### Calculated VER 
+        vmin = -np.max(np.abs(ver_z[fi,iz,:]))*1.1
+        vmax = np.max(np.abs(ver_z[fi,iz,:]))*1.1
+        ax3.plot(time, ver_z[fi,iz,:]/AR.f_VER_4_28(AR.z_4_28_calc_m[iz])*100, c=cols[fi])
+        if fi == freq.size-1:
+            ax3b = ax3.twinx() 
+            ax3b.plot(time, ver_z[fi,iz,:], ls=" ", color="w")    
+            ax3.set_ylim(vmin/AR.f_VER_4_28(AR.z_4_28_calc_m[iz])*100, vmax/AR.f_VER_4_28(AR.z_4_28_calc_m[iz])*100)
+            ax3b.set_ylim(vmin, vmax)
+        ### Integrated Intensity
+        imin = -np.max(np.abs(I1[fi,:]))*1.1
+        imax = np.max(np.abs(I1[fi,:]))*1.1
+        ax4.plot(time, I1[fi,:]/AR.I_background_dayglow*100, c=cols[fi])
+        ### NOTE: No need to conversion to Rayleigh here, it is already done. 
+        if fi== freq.size-1:
+            ax4b = ax4.twinx() 
+            ax4b.plot(time, I1[fi,:], c="k", ls=" ")
+            ax4.set_ylim(imin/AR.I_background_dayglow*100, imax/AR.I_background_dayglow*100)
+            ax4b.set_ylim(imin, imax)
+    ###
+    ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(AR.z_4_28_calc_m[iz]/1e3) + r" / [$m/s$]")
+    ax3.set_ylabel("VER$_{4.28}$ pert. at " + "{:.1f} km".format(AR.z_4_28_calc_m[iz]/1e3) + r" / [%]")
+    ax3b.set_ylabel(r"VER$_{4.28}$ pert. at " + "{:.1f} km".format(AR.z_4_28_calc_m[iz]/1e3) + r" / [$ph/m^3/s$]")
+    ax4.set_ylabel("Relative Intensity pert. [%]")
+    ax4b.set_ylabel("Intensity pert. [$Rayleigh$]")
+    ax4.set_xlabel("Time / [$s$]")
+    ax4.set_xlim(-10,tf)
+    ax2.legend(frameon=False)
+    for ax in  [ax2, ax3, ax4, ax3b, ax4b]:
+        ax.ticklabel_format(style='sci', axis='y', scilimits=(-2, 2), useMathText=True)
+    ###
+    fig.align_labels() 
+    fig.suptitle("DAYGLOW, calculated with Airglow framework")
+    fig.tight_layout()
+    ################################################################################################################
 
 
+    
 
+    ################################################################################################################
+    fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
+    fi_50 = 2
+    ###
+    ax1.plot(AR.f_VER_4_28(AR.z_4_28_calc_m), AR.z_4_28_calc_km, c="k") 
+    ax1b = ax1.twiny()
+    ax1b.plot(np.max(abs(ver_z[fi_50,:,:]), axis=1)/AR.f_VER_4_28(AR.z_4_28_calc_m)*100, AR.z_4_28_calc_km, c="r", label="Max Perturbation")
+    ax1b.set_xlabel(r"Max. VER$_{4.28}$ perturbation / [%]")
+    ax1b.xaxis.label.set_color('red')
+    ax1.set_xlabel("VER / ph/m3/s")
+    ax1.set_ylabel("Altitude / km")
+    ax1.set_xlim(0,7e12)
+    ###
+    ax2.plot(AR.f_amplification(AR.z_4_28_calc_m)/AR.f_amplification(90e3), AR.z_4_28_calc_km, c="k", label=r"$\sqrt{\rho(90)c(90)/(\rho(z)c(z))}$") 
+    ax2.set_xlabel("Amplification with respect to 90 km")
+    ax2.legend(frameon=False, loc=4)
+    ax2.set_xscale("log")
+    ax2.set_xlim(1,1e4)
+    ###
+    fac=AR._factor_photons_watt(4.28, dir="ps_to_W")
+    # print(fac)
+    im = ax3.pcolormesh(time, AR.z_4_28_calc_km, ver_z[fi_50,:,:]*fac, vmin=-np.max(np.abs(ver_z[fi_50,:,:]))*fac, vmax=np.max(np.abs(ver_z[fi_50,:,:]))*fac)
+    ax3.axhline(AR.z_4_28_calc_km[np.argmax(np.max(abs(ver_z[fi_50,:,:]), axis=1))], c="w", ls=":", label="Maximum perturbation")
+    ax3.axhline(AR.z_4_28_calc_km[np.argmax(AR.f_VER_4_28(AR.z_4_28_calc_m))], c="w", ls="--", label=r"Maximum VER$_{4.28}$")
+    # fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{4.28}$ [$ph/m^3/s$]")
+    fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{4.28}$ [$W/m^3$]")
+    ax3.set_xlabel("Time / [$s$]")
+    leg = ax3.legend(frameon=False, loc=2)
+    for text in leg.get_texts():
+        text.set_color('w') # Set all legend text to green
+    # ax3.set_ylabel("Altitude / [$km$]")
+    ax3.set_xlim(0,1000)
+    ax3.set_ylim(90,150)
+    for ax in [ax1,ax2,ax3]:
+        ax.set_ylim(90,150)
+    fig.suptitle("DAYGLOW, calculated with Airglow framework")
+    fig.tight_layout()
+    ################################################################################################################
+
+    
+    ################################################################################################################
+    ### HANDMADE CALCUATION (analytical sinusoid): 
+    ################################################################################################################    
+    ### 0. Pick frequency 
+    # f0s = 1/50
+    f0s = np.array([0.2,0.1,0.02, 0.01])
+    ### 1. Make up an altitude range  
+    zrange = np.linspace(90e3,160e3,200)
+    ### 2. Get frequencies / omega 
+    ff = np.fft.fftfreq(Nt, d=dt)
+    fr_fft = abs(ff)
+    om = ff*(2*np.pi)
+    ### 4. Get amplification, normalize by the value at 90 km: 
+    a_func = AR.f_amplification(zrange)[:,None]/AR.f_amplification(hstart)
+    a_func2 = np.sqrt(AR.f_rho(90e3)/ (AR.f_rho(zrange)))   ### Alternative definition, without sound speed 
+    ### 5. Calculate attenuation term 
+    zatt = np.concatenate((np.linspace(0,zrange[0]-1e3,50),zrange))
+    FFver, ZZver2 = np.meshgrid(fr_fft, zatt  )
+    attenuation = AR.f_alpha_2d((ZZver2, FFver))
+    att_exp = np.exp(-integrate.cumulative_trapezoid(attenuation, zatt, axis=0))   ### Supposes Np/m 
+    att_exp = att_exp[-zrange.size:,:]
+    ### 5b. Redefine amplification, including attenuation
+    a_func = a_func * att_exp 
+    
+    ### Function to generate a sinusoid at a specific frequency and its dVER 
+    def calculate_airglow_sinusoid(f0):
+        ### 6. Defined derivative of tapered sinusoid (functions above) and normalize by amplitude 
+        tVEL = tapered_sinusoid_dt(time[None,:], zrange[:,None], f0, c=c)  
+        tVEL_dz = np.gradient(tapered_sinusoid_dz(time[None,:], zrange[:,None], f0, c=c), time, axis=1) 
+        tvmax = np.abs(tVEL).max()
+        tVEL = tVEL/tvmax * ampl_at_start
+        tVEL_dz = tVEL_dz/tvmax * ampl_at_start
+        tDIS = tapered_sinusoid(time[None,:], zrange[:,None], f0, c=c)/tvmax* ampl_at_start
+        print("Max. of velocity signal at z = 90 km: ", np.max(tVEL[0,:]))
+        
+        ### 7. Get their fft
+        fftDIS = np.fft.fft(tDIS, axis=1)
+
+        ### 8. Calculate the desired dver in frequency domain (EQ 4.22): 
+        ### Calculate gradient of vel manually. NOTE: a_func contains both amplificaiton and attenuation  
+        fft_dver = AR.alpha_t * AR.f_VER_4_28(zrange)[:,None] * (AR.f_gamma(zrange)[:,None]-1)* AR.f_t(zrange)[:,None]*\
+                                (np.gradient(fftDIS, zrange, axis=0)*a_func  + fftDIS*np.gradient(a_func, zrange, axis=0) ) 
+        ### 9. OPTIONAL: Add advection term (don't forget amplification of u): 
+        fft_dver += fftDIS*AR.f_dVER_4_28(zrange)[:,None]*a_func
+        
+        ### 10. Back to time domain 
+        dver = np.fft.ifft(fft_dver, axis=1).real
+
+        ### 11. Remove linear trend. 
+        start = dver[:,0][:,None]
+        end   = dver[:,50][:,None]
+        trend = np.linspace(0, 1, dver.shape[1])   
+        trend = start + (end - start)/(trend[50]-trend[0]) * trend  # shape (Nz, Nt)
+        dver = dver - trend
+        ### 12. Integrated intensity 
+        I = np.trapz(dver, zrange, axis=0 )
+        return(tDIS, dver, I)
+    I_background = np.trapz(AR.f_VER_4_28(zrange), zrange, axis=0 )
+
+
+    ################################################################################################################
+    ### Show waveforms at different frequencies 
+    ################################################################################################################
+    fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,9)) 
+    cmap = plt.get_cmap("plasma")
+    cols = [cmap(i) for i in np.linspace(0.2, 0.8, f0s.size)]
+    ### Original vel shape
+    # iz = 0  
+    iz2 = np.argmin(abs(zrange-AR.z_4_28_calc_m[iz]))   ### To ensure we plot the same altitude as the other method 
+    ### Propagated at 90 km 
+    for fi, f0 in enumerate(f0s):
+        tDIS, dver, I = calculate_airglow_sinusoid(f0)
+
+        ### Starting waveform at 90 km 
+        ax2.plot(time, np.gradient(tDIS[iz2,:],time), c=cols[fi], label="f={:.3g} Hz, T={:.3g} s".format(f0, 1/f0))
+        if fi == f0s.size-1:
+            ax2.set_ylim(-1.5*ampl_at_start,1.5*ampl_at_start)
+        ### Calculated VER 
+        vmin = -np.max(np.abs(dver[iz2,:]))*1.1
+        vmax = np.max(np.abs(dver[iz2,:]))*1.1
+        ax3.plot(time, dver[iz2,:]/AR.f_VER_4_28(zrange[iz2])*100, c=cols[fi])
+        if fi == f0s.size-1:
+            ax3b = ax3.twinx() 
+            ax3b.plot(time, dver[iz2,:], ls=" ", color="w")    
+            ax3.set_ylim(vmin/AR.f_VER_4_28(zrange[iz2])*100, vmax/AR.f_VER_4_28(zrange[iz2])*100)
+            ax3b.set_ylim(vmin, vmax)
+        ### Integrated Intensity
+        imin = -np.max(np.abs(I))*1.1
+        imax = np.max(np.abs(I))*1.1
+        ax4.plot(time, I/I_background*100, c=cols[fi])
+        if fi== f0s.size-1:
+            ax4b = ax4.twinx() 
+            ax4b.plot(time, I*AR._factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"), c="k", ls=" ")
+            ax4.set_ylim(imin/I_background*100, imax/I_background*100)
+            ax4b.set_ylim(imin*AR._factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"), imax*AR._factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"))
+    ###
+    ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$m/s$]")
+    ax3.set_ylabel("VER$_{4.28}$ pert. at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [%]")
+    ax3b.set_ylabel(r"VER$_{4.28}$ pert. at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$ph/m^3/s$]")
+    ax4.set_ylabel("Relative Intensity pert. [%]")
+    ax4b.set_ylabel("Intensity pert. [$Rayleigh$]")
+    ax4.set_xlabel("Time / [$s$]")
+    ax4.set_xlim(-10,tf)
+    ax2.legend(frameon=False)
+    for ax in  [ax2, ax3, ax4, ax3b, ax4b]:
+        ax.ticklabel_format(style='sci', axis='y', scilimits=(-2, 2), useMathText=True)
+    ###
+    fig.align_labels() 
+    fig.suptitle("DAYGLOW, calculated with Homemade sine framework")
+    fig.tight_layout()
+    ################################################################################################################
+    
+
+    ################################################################################################################
+    ### Calculate for T=50s 
+    ################################################################################################################
+    tVEL, dver, I = calculate_airglow_sinusoid(1/50)
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
+    ###
+    ax1.plot(AR.f_VER_4_28(zrange), zrange/1e3, c="k") 
+    ax1b = ax1.twiny()
+    ax1b.plot(np.max(abs(dver), axis=1)/AR.f_VER_4_28(zrange)*100, zrange/1e3, c="r", label="Max Perturbation")
+    ax1b.set_xlabel(r"Max. VER$_{4.28}$ perturbation / [%]")
+    ax1b.xaxis.label.set_color('red')
+    ax1.set_xlabel("VER / ph/m3/s")
+    ax1.set_ylabel("Altitude / km")
+    ax1.set_xlim(0,7e12)
+    ###
+    ax2.plot(AR.f_amplification(zrange)/AR.f_amplification(90e3), zrange/1e3, c="k", label=r"$\sqrt{\rho(90)c(90)/(\rho(z)c(z))}$") 
+    ax2.plot(a_func2, zrange/1e3, c="grey", ls="--", label=r"$\sqrt{\rho(90)/\rho(z)}$") 
+    ax2.set_xlabel("Amplification with respect to 90 km")
+    ax2.set_xscale("log")
+    ax2.legend(frameon=False, loc=4)
+    ax2.set_xlim(1,1e4)
+    ###
+    im = ax3.pcolormesh(time, zrange/1e3, dver[:,:]*fac, vmin=-np.max(np.abs(dver))*fac, vmax=np.max(np.abs(dver))*fac)
+    ax3.axhline(zrange[np.argmax(np.max(abs(dver), axis=1))]/1e3, c="w", ls=":", label="Maximum perturbation")
+    ax3.axhline(zrange[np.argmax(AR.f_VER_4_28(zrange))]/1e3, c="w", ls="--", label=r"Maximum VER$_{4.28}$")
+    # fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{4.28}$ [$ph/m^3/s$]")
+    fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{4.28}$ [$W/m^3$]")
+    ax3.set_xlabel("Time / [$s$]")
+    leg = ax3.legend(frameon=False, loc=2)
+    for text in leg.get_texts():
+        text.set_color('w') # Set all legend text to green
+    # ax3.set_ylabel("Altitude / [$km$]")
+    ax3.set_xlim(0,1000)
+    ax3.set_ylim(90,150)
+    for ax in [ax1,ax2,ax3]:
+        ax.set_ylim(90,150)
+    fig.suptitle("DAYGLOW, calculated with Homemade sine framework")
+    fig.tight_layout()
+    # plt.show()
+    ################################################################################################################
+    
 
 
 # =========================================================================================================
@@ -4166,7 +4703,9 @@ def plot_airglow_traces(amp_dayglow, amp_nightglow, GF_f0, GF_f0_u, amp_at_90, f
 if __name__ == '__main__':
 # =========================================================================================================
 
-    check_simple_perturbation()
+    check_simple_perturbation_nightglow()
+    # check_simple_perturbation_dayglow()
+    plt.show()
     quit()
 
     ## Load atmosphere
