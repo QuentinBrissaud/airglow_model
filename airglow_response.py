@@ -145,6 +145,7 @@ class Seismograms:
         else:
             scalar_moment = 10**(1.5 * mw + 9.1)
             mt_strike = pmt.MomentTensor(strike=strike, dip=dip, rake=rake, scalar_moment=scalar_moment).m6()
+            print(scalar_moment)
         mt = dict(mnn=mt_strike[0], mee=mt_strike[1], mdd=mt_strike[2], mne=mt_strike[3], mnd=mt_strike[4], med=mt_strike[5],)
         mt_source = gf.MTSource(lat=0., lon=0., depth=depth, **mt, **stf)
 
@@ -3021,15 +3022,88 @@ def check_simple_perturbation_nightglow():
     c = 200                 ### m/s
     dt = 0.1                ### s
     tf = 1000               ### s
-    hstart = 90e3           ### m   ### To test Kenda 2018 
-    ampl_at_start = 5e-3    ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda 2018) 
-    # hstart = 100e3          ### m   ### To test Sutin 2018
-    # ampl_at_start = 4e-2    ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin 2018) 
+    # hstart = 90e3           ### m   ### To test Kenda 2018 
+    # ampl_at_start = 5e-3    ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda 2018) 
+    hstart = 100e3          ### m   ### To test Sutin 2018
+    ampl_at_start = 4e-2    ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin 2018) 
 
-    time = np.arange(-tf/10, tf, dt)
+    # time = np.arange(-tf/10, tf, dt)
+    time = np.arange(-tf, tf, dt)
     Nt = time.size
     VEL = np.zeros((1,freq.size, Nt))
     DIS = np.zeros((1,freq.size, Nt))
+
+
+    def tapered_gaussian(t, z, f0, c=200):
+        fc = np.sqrt(2)*f0
+        ### Tapered sinusoid propagating at speed c 
+        sig = (1 - ((t-z/c)*fc)**2) * np.exp(-0.5*(t-z/c)**2*fc**2)
+        #sig = np.sin(2*np.pi*f0*(t - z/c))
+        Nsine = int((8/fc)/dt)
+        if not Nsine%2==0: 
+            Nsine+=1
+        tp = tukey(Nsine, alpha=0.0)
+
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop-Nsine//2),int(Nt-Nt0-Nsine//2-Nprop)))
+            sig*=tap
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop-Nsine//2),int(Nt-Nt0-Nsine//2-Nprop)))
+                sig[i,:]*=tap
+        return(sig)
+    
+    def tapered_gaussian_dz(t, z, f0, c=200):
+        fc = np.sqrt(2)*f0
+        ### Tapered sinusoid propagating at speed c 
+        sig = (fc**2 / c) * (t - z/c) * (3 - fc**2 * (t - z/c)**2) \
+                 * np.exp(-0.5 * (t - z/c)**2 * fc**2)
+        #sig = np.sin(2*np.pi*f0*(t - z/c))
+        Nsine = int((8/fc)/dt)
+        if not Nsine%2==0: 
+            Nsine+=1
+        tp = tukey(Nsine, alpha=0.0)
+
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop-Nsine//2),int(Nt-Nt0-Nsine//2-Nprop)))
+            sig*=tap
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop-Nsine//2),int(Nt-Nt0-Nsine//2-Nprop)))
+                sig[i,:]*=tap
+        return(sig)
+    
+    def tapered_gaussian_dt(t, z, f0, c=200):
+        fc = np.sqrt(2)*f0
+        ### Tapered sinusoid propagating at speed c 
+        sig = -fc**2 * (t - z/c) * (3 - fc**2 * (t - z/c)**2) \
+                * np.exp(-0.5 * (t - z/c)**2 * fc**2)
+        #sig = np.sin(2*np.pi*f0*(t - z/c))
+        Nsine = int((8/fc)/dt)
+        if not Nsine%2==0: 
+            Nsine+=1
+        tp = tukey(Nsine, alpha=0.0)
+
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop-Nsine//2),int(Nt-Nt0-Nsine//2-Nprop)))
+            sig*=tap
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop-Nsine//2),int(Nt-Nt0-Nsine//2-Nprop)))
+                sig[i,:]*=tap
+        return(sig)
 
 
     def tapered_sinusoid(t, z, f0, c=200):
@@ -3103,11 +3177,28 @@ def check_simple_perturbation_nightglow():
     # plt.show() 
     # quit()
 
+    ### Same for gaussian signal 
+    # fig, ax = plt.subplots() 
+    # for fi, f in enumerate(freq):
+    #     # ax.plot(time, VEL[0,fi,:])
+    #     # ax.plot(time, tapered_gaussian(time, hstart, f), ls="--")
+    #     # ax.plot(time, tapered_gaussian_dz(time, hstart, f), ls="--")
+    #     # ax.plot(time, np.gradient( tapered_gaussian(time[None,:], hstart+np.linspace(-1e2,1e2,11)[:,None], f), hstart+np.linspace(-1e2,1e2,11), axis=0 )[5,:] , ls=":")
+    #     ax.plot(time, tapered_gaussian_dt(time, hstart, f), ls="--")
+    #     ax.plot(time, np.gradient( tapered_gaussian(time, hstart, f), time) , ls=":")
+    # plt.show() 
+    # quit()
+
 
     ### Construct ground sinusoid for our own framework: 
+    # for fi, f0 in enumerate(freq):
+    #     VEL[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
+    #     DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_sinusoid(time, 0e3, f0, c=c), time, initial=0)
+
+    ### Construct ground gaussian for our own framework: 
     for fi, f0 in enumerate(freq):
-        VEL[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
-        DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_sinusoid(time, 0e3, f0, c=c), time, initial=0)
+        VEL[0,fi,:] = tapered_gaussian(time, 0e3, f0, c=c)
+        DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_gaussian(time, 0e3, f0, c=c), time, initial=0)
     north_shifts = freq 
     east_shifts = np.array([0. for i in range(north_shifts.size)])
 
@@ -3358,7 +3449,8 @@ def check_simple_perturbation_nightglow():
     dampl_dz = np.gradient(ampl, zatt, axis=0) 
     
     def calculate_airglow_sinusoid(f0):
-        tVEL = tapered_sinusoid(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start 
+        # tVEL = tapered_sinusoid(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start 
+        tVEL = tapered_gaussian(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start 
         fftVEL = np.fft.fft(tVEL, axis=1)
         ### VEL(z,f) = VEL(0,f)*exp(-2*1j*pi*f*int_0_z(1/c dz))*exp(-int_0_z(alpha dz)*ampl(z))
         ### dVEL(z,f)_dz = VEL(0,f)*(dphase_dz⋅ampl⋅att + dampl_dz⋅phase⋅att + datt_dz⋅phase⋅ampl)
@@ -3865,6 +3957,199 @@ def check_simple_perturbation_dayglow():
     fig.tight_layout()
     # plt.show()
     ################################################################################################################
+    
+
+def check_Lognonne_2016():
+    ### Calculation of Integrated VER (in Rayleigh) at different epicentral distances
+    ### For a Mw 6.5 (M0 = 10e19 Nm) earthquake.
+    ### Epicentral distances = [15, 30, 45, 60]
+
+    ### First, define the grid of locations. 
+    gridded       = False
+    r_venus = 6051.8e3  ### m 
+    north_shifts  = np.array([15., 30., 45., 60.])*2*np.pi*r_venus/360
+    east_shifts   = np.array([0. for i in range(north_shifts.size)])
+    print(north_shifts)
+
+    ### Option for Pyrocko 
+    opt_synthetics = dict(
+        ### Options for source 
+        mw = 6.5,              ### if none: We only get the Green's function
+        depth = 30e3,          ### Only one depth
+        strike = 45.,           ### Default mechanism 
+        dip =  45., 
+        rake = 45.,
+        stf_type = None,       ### Dirac source 
+        #stf_type = 'triangle', 
+        # stf_type = 'sinus', 
+        # effective_duration = 9.,
+        ###  
+        ### Options for store
+        base_folder='/projects/restricted/infrasound/data/infrasound/2023_Venus_inversion/',
+        ### Old option, single store 
+        #store_id = 'GF_venus_Cold100_qssp',
+        #store_id = 'GF_venus_Cold100_qssp_grid',
+        ### Give store names, and min and max valid distance 
+        #store_ids_dists = [('GF_venus_Cold100_qssp_grid',0e3,500e3),('GF_venus_Cold100_qssp_grid_mid',500e3,8000e3)],
+        store_ids_dists = [('GF_venus_Cold100_atten_qssp_nearfield',0e3,50e3),('GF_venus_Cold100_atten_qssp',50e3,8000e3)],
+        ###
+        ### Options for grid 
+        north_shifts = north_shifts, 
+        east_shifts = east_shifts,
+        gridded=gridded
+    )
+
+    ### INITIALIZE SEISMOGRAM CLASS 
+    ### we build seismograms over grid
+    ### 
+    SEISMO = Seismograms(**opt_synthetics)
+    print("Total grid size: ", SEISMO.NN.size)
+
+    ### [1584.3e3, 3168.7e3, 4753.0e3 6337.4e3]
+    ns, es       = 1584.3e3, 0e3
+    ### Plot one of the waveforms for check
+    fig = SEISMO.plot_traces(ns, es, do_interpolate=True)
+
+    SEISMO.arrange_interpolate_synthetics(tmax=60*60, dt=0.1)
+
+    ### Load airglow class 
+    AIRGLOW = AirglowSignal(SEISMO, Nz=1000)
+
+    dir_save="./results_test/"
+    if not os.path.exists(dir_save):
+        os.makedirs(dir_save)
+    dir_save += "singletrace_"
+    list_inorth, list_ieast = AIRGLOW.iNN, [0 for i in range(AIRGLOW.Nn)]
+    # print(list_inorth, list_ieast)
+
+    ### Calculation of the Nightglow 
+    AIRGLOW.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[],
+                                    do_parallel=True, 
+                                    fourier_filtering=True,   ### Use time filtering 
+                                    dir_save = dir_save,
+                                    time_save = AIRGLOW.t_new) ### Save all timesteps 
+
+    ### Calculation of the Dayglow
+    AIRGLOW.calculate_4_28_airglow(list_ieast, list_inorth, loc_save_idx=[],
+                            do_parallel=True, 
+                            dir_save=dir_save, 
+                            time_save = AIRGLOW.t_new) ### Save all timesteps 
+    
+    ####################################################################################################
+    ### FIGURE 
+    ####################################################################################################
+    c_dayglow = "orangered"
+    c_nightglow = "forestgreen"
+    ### Load VER grids:
+    I_nightglow = np.load(dir_save + "nightglow_I_t.npy")
+    VER_Vz_nightglow = np.load(dir_save + "nightglow_dver_t.npy")
+    I_dayglow = np.load(dir_save + "dayglow_I_t.npy")
+    VER_Uz_dayglow = np.load(dir_save + "dayglow_dver_t.npy")
+
+    time = AIRGLOW.t_new
+    dt_airglow = SEISMO.dt
+    ###
+    z_ver_127 = AIRGLOW.z_1_27_calc_m  ### Always in meter
+    z_ver_428 = AIRGLOW.z_4_28_calc_m  ### Always in meter
+    ### Background VER 
+    VER_127 = AIRGLOW.f_VER_1_27(z_ver_127) 
+    VER_428 = AIRGLOW.f_VER_4_28(z_ver_428)
+    ### Background Intensity 
+    I_background_nightglow = AIRGLOW.I_background_nightglow
+    I_background_dayglow   = AIRGLOW.I_background_dayglow
+
+
+    ##############################################################
+    ### Create figure
+    fig = plt.figure(figsize=(10, 8))
+    gs = gridspec.GridSpec(4, 2, figure=fig, width_ratios=[4, 1])
+
+    axes = [fig.add_subplot(gs[i, 0]) for i in range(4)] 
+    axv1 = fig.add_subplot(gs[1, 1])
+    axv2 = fig.add_subplot(gs[3, 1])
+    # ax3b = axes[3].twinx()   ### Plot as purcentage of background intensity 
+    # ax1b = axes[1].twinx()   ### Plot as purcentage of background intensity 
+    
+    colors = ["k", "r", "b", "g"]
+    dR = 20 ### Rayleighs
+    dR2 = 20e4
+    fmin, fmax = 0.001, 0.04
+    R_threshold = 1600
+    ##############################################################
+
+    ### Select a location: 
+    # ns, es       = 3000e3, 0e3
+    for i, (ns,es) in enumerate(zip(north_shifts, east_shifts)):
+        idx = np.argmin(np.sqrt((AIRGLOW.NN-ns)**2+(AIRGLOW.EE-es)**2)) 
+        i_east, i_north = 0, idx
+        print(i_east, i_north)
+
+        if i==0:
+            axes[0].plot(time, AIRGLOW.VEL[i_east, i_north,:], c="k", lw=1)
+            axes[2].plot(time, AIRGLOW.DIS[i_east, i_north,:], c="k", lw=1)
+
+        ### 
+        ### Filter I between fmin and fmax: 
+        I_nightglow_filt = butter_filter(I_nightglow[i_east, i_north, :], 1/dt_airglow, fmin,fmax, order=4)
+        axes[1].plot(time, I_nightglow_filt+dR*i, c=colors[i], lw=1, label="{:.0f}km, {:.0f}°".format(ns/1e3, ns*180/(np.pi*r_venus)))
+        ###
+        # axes[1].axhline(dR*i + R_threshold , c=colors[i], lw=1, ls=":")
+        # axes[1].axhline(dR*i - R_threshold , c=colors[i], lw=1, ls=":")
+    
+        ###
+        ### Filter I between fmin and fmax: 
+        I_dayglow_filt = butter_filter(I_dayglow[i_east, i_north, :], 1/dt_airglow, fmin,fmax, order=4)
+        axes[3].plot(time, I_dayglow_filt+dR2*i, c=colors[i], lw=1)
+        ###
+        # axes[3].axhline(dR2*i + I_background_dayglow , c=colors[i], lw=1, ls=":")
+        # axes[3].axhline(dR2*i - I_background_dayglow , c=colors[i], lw=1, ls=":")
+    ###
+    axes[0].set_ylabel(r"Ground Vel. / [$m/s$]")
+    axes[0].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+    axes[2].set_ylabel(r"Ground Disp. / [$m$]")
+    axes[2].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+    ###
+    axes[1].set_ylabel(r"1.27$\mu m$ Intensity / [$R$]")
+    axes[1].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+    ###
+    axes[3].set_ylabel(r"4.28$\mu m$ Intensity / [$R$]")
+    axes[3].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+    ###
+    axes[1].legend(framealpha=0.8, edgecolor="none", loc=1, title="Distance")
+
+    ### Plot VER profiles 
+    axv1.fill_betweenx(z_ver_127/1e3, 0, VER_127, edgecolor="k", facecolor=c_nightglow, alpha=0.4)
+    axv1.set_ylabel(r"Altitude / [$km$]")
+    axv1.set_xlabel(r"1.27$\mu m$ VER / [$ph/m^3/s$]")
+    ###
+    axv2.fill_betweenx(z_ver_428/1e3, 0, VER_428, edgecolor="k", facecolor=c_dayglow, alpha=0.4)
+    axv2.set_ylabel(r"Altitude / [$km$]")
+    axv2.set_xlabel(r"4.28$\mu m$ VER / [$ph/m^3/s$]")
+
+    ###
+    axes[-1].set_xlabel("Time / [$s$]")
+    for ax in axes:
+        ax.set_xlim(0,60*60)
+    axv1.set_xlim(0, 6e11)
+    axv2.set_xlim(0, 7e12)
+    for ax in [axv1, axv2]:
+        ax.set_ylim(80,160)
+        ax.yaxis.set_label_position("right")
+        ax.yaxis.tick_right()
+        ax.xaxis.get_offset_text().set_position((1.2, 1.0))  # (x, y) in axis coordinates
+        ax.xaxis.get_offset_text().set_horizontalalignment('left')
+        ax.xaxis.get_offset_text().set_verticalalignment('bottom')
+    for ax in axes[:-1]:
+        ax.set_xticklabels([])
+
+    fig.suptitle("Seismic and Airglow signals for Mw 6.5 earthquake, filtered between [{:.3g}, {:.3g}] Hz".format(fmin, fmax))
+    fig.align_labels()
+    fig.subplots_adjust(hspace=0.4, wspace=0.2, bottom=0.08, top=0.93)
+    ###
+    fig.savefig(dir_save + "Nightglow_Dayglow_traces_PL2016_dirac.png", dpi=300)
+
+    
+
     
 
 
@@ -4712,7 +4997,8 @@ if __name__ == '__main__':
 # =========================================================================================================
 
     check_simple_perturbation_nightglow()
-    check_simple_perturbation_dayglow()
+    # check_simple_perturbation_dayglow()
+    # check_Lognonne_2016()
     plt.show()
     quit()
 
