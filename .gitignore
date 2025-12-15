@@ -1,9 +1,7 @@
 results/
-results_test/
+results*/
 Figures/
 __pycache__/
 .ipynb*
-results_detectability/
-results_detectability/
 *.pyc
 

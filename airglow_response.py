@@ -412,6 +412,7 @@ b = None
 a = None
 loc_save = None
 itime_save = None
+save_ver = None
 gridded = None
 dir_save = None 
 dphase_att_ampl_dz = None 
@@ -729,7 +730,7 @@ def plot_scalogram(sig, time, ax, ax_cb=None, title_unit='', font=10, graph="pme
 # =========================================================================================================
 ### Function to convert between different Radiance units and Rayleigh
 # =========================================================================================================
-def _factor_W_to_Rayleigh(L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
+def factor_W_to_Rayleigh(L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
     ### bandwidth should be in micrometer if Radiance is in W/m2/micrometer/sr
     ### Note: In B Kenda's thesis, its 4pi.(Ep)^-1 and not (4pi.Ep⁻1) that is correct.
     ### Correct definition of the Rayleigh: 1R = (1/4pi) * 1e10 photons/s/cm2/steradians 
@@ -759,7 +760,7 @@ def _factor_W_to_Rayleigh(L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
         return(1/factor)
     else: 
         raise("Wrong conversion specified.")
-    
+
 
 # =========================================================================================================
 ### Function to define global parameters for parallelisation 
@@ -768,14 +769,14 @@ def init_worker_nightlow(_list_of_locations,
                         #  _fft_vzs, _fft_uzs, 
                          _att_exp, _amplification, _phase_shift_z,
                         _f_VER_1_27,_f_dVER_1_27, _z_1_27_calc_m, _fourier_filtering, _Nt, _fs, 
-                        _b, _a, _loc_save, _itime_save, _gridded, _tf_phase_nightglow, _dir_save):
+                        _b, _a, _loc_save, _itime_save, _save_ver, _gridded, _tf_phase_nightglow, _dir_save):
                         # _dphase_att_ampl_dz, 
 #                        _zatt, _zrange):
     # global fft_vzs, fft_uzs
     global att_exp, amplification, phase_shift_z
     global f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, fourier_filtering, tf_phase_nightglow, Nt, fs
     global b, a
-    global list_of_locations, loc_save, itime_save, gridded, dir_save
+    global list_of_locations, loc_save, itime_save, gridded, dir_save, save_ver
     # global dphase_att_ampl_dz, 
     # global zatt, zrange
 
@@ -795,6 +796,7 @@ def init_worker_nightlow(_list_of_locations,
     a = _a
     loc_save = _loc_save
     itime_save = _itime_save
+    save_ver = _save_ver
     gridded = _gridded
     tf_phase_nightglow = _tf_phase_nightglow
     dir_save = _dir_save
@@ -804,10 +806,10 @@ def init_worker_nightlow(_list_of_locations,
 
 
 def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, _phase_shift_z, _Nt,
-                _z_4_28_calc_m, _fac_temperature, _f_VER_4_28, _f_dVER_4_28, _loc_save, _itime_save, _gridded, _dir_save):
+                _z_4_28_calc_m, _fac_temperature, _f_VER_4_28, _f_dVER_4_28, _loc_save, _itime_save, _save_ver, _gridded, _dir_save):
     global fft_uzs, att_exp, amplification, phase_shift_z, Nt
     global z_4_28_calc_m, fac_temperature, f_VER_4_28, f_dVER_4_28
-    global list_of_locations, loc_save, itime_save, gridded, dir_save
+    global list_of_locations, loc_save, itime_save, gridded, dir_save, save_ver
 
     list_of_locations = _list_of_locations
     fft_uzs = _fft_uzs
@@ -821,6 +823,7 @@ def init_worker_dayglow(_list_of_locations, _fft_uzs, _att_exp, _amplification, 
     fac_temperature = _fac_temperature
     loc_save = _loc_save
     itime_save = _itime_save
+    save_ver = _save_ver
     gridded = _gridded
     dir_save = _dir_save 
 
@@ -1044,8 +1047,8 @@ def integrate_line_of_sight(dver_z, z_calc_m, wavelength):
     amp_airglow = np.trapz(dver_z, x=z_calc_m, axis=0) # /np.trapz(f_VER(alts_dayglow), x=alts_dayglow,)
 
     ### Convert to Rayleigh
-    #amp_airglow *= _factor_W_to_Rayleigh(wavelength, dir="Radiance_to_Rayleigh")  ### if VER was in W/m3
-    amp_airglow *= _factor_W_to_Rayleigh(wavelength, dir="phRadiance_to_Rayleigh")  ### if VER was in ph/s/m3
+    #amp_airglow *= factor_W_to_Rayleigh(wavelength, dir="Radiance_to_Rayleigh")  ### if VER was in W/m3
+    amp_airglow *= factor_W_to_Rayleigh(wavelength, dir="phRadiance_to_Rayleigh")  ### if VER was in ph/s/m3
 
     return(amp_airglow)
 
@@ -1054,7 +1057,7 @@ def integrate_line_of_sight(dver_z, z_calc_m, wavelength):
 ### Wrapper function for calculating NIGHTglow at one location (outside of class to be parallelisable)
 # =========================================================================================================
 def nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, att_exp, amplification, phase_shift_z,f_VER_1_27, f_dVER_1_27,
-                        z_1_27_calc_m, fourier_filtering, Nt, fs, b,a, loc_save, itime_save, gridded, tf_phase_nightglow, dir_save,
+                        z_1_27_calc_m, fourier_filtering, Nt, fs, b,a, loc_save, itime_save, save_ver, gridded, tf_phase_nightglow, dir_save,
                         # dphase_att_ampl_dz, zatt, zrange):
                         ):
     
@@ -1105,14 +1108,18 @@ def nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, att_exp, am
         np.save(dir_save + "nightglow_vz_z_{:d}_{:d}".format(i_east, i_north), vz_z)
         np.save(dir_save + "nightglow_I_{:d}_{:d}".format(i_east, i_north), amp_nightglow)
 
-    return(vz_z[:,itime_save], dver_z[:,itime_save], amp_nightglow[itime_save])
+    if save_ver:
+        return(vz_z[:,itime_save], dver_z[:,itime_save], amp_nightglow[itime_save])
+    else: 
+        return((amp_nightglow[itime_save],))
+
 
 
 # =========================================================================================================
 ### Wrapper function for calculating DAYglow at one location (outside of class to be parallelisable)
 # =========================================================================================================
 def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification, phase_shift_z, Nt,
-                        z_4_28_calc_m, fac_temperature, f_VER_4_28, f_dVER_4_28, loc_save, itime_save, gridded, dir_save):
+                        z_4_28_calc_m, fac_temperature, f_VER_4_28, f_dVER_4_28, loc_save, itime_save, save_ver, gridded, dir_save):
     
     i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
 
@@ -1144,7 +1151,11 @@ def dayglow_at_location(i_en, list_of_locations, fft_uzs, att_exp, amplification
         np.save(dir_save + "dayglow_dver_z_{:d}_{:d}".format(i_east, i_north), dver_z)
         np.save(dir_save + "dayglow_uz_z_{:d}_{:d}".format(i_east, i_north), uz_z)
         np.save(dir_save + "dayglow_I_{:d}_{:d}".format(i_east, i_north), amp_dayglow)
-    return(uz_z[:,itime_save], dver_z[:,itime_save], amp_dayglow[itime_save])
+
+    if save_ver:
+        return(uz_z[:,itime_save], dver_z[:,itime_save], amp_dayglow[itime_save])
+    else: 
+        return((amp_dayglow[itime_save],))
     
 
 
@@ -1152,7 +1163,7 @@ def worker_func_nightglow(i):
     # location = list_of_locations[i]
     return nightglow_at_location(i, list_of_locations, fft_vzs, fft_uzs, att_exp, amplification, 
                                phase_shift_z, f_VER_1_27, f_dVER_1_27, z_1_27_calc_m, 
-                               fourier_filtering, Nt, fs, b, a, loc_save, itime_save, gridded, tf_phase_nightglow, dir_save)#,
+                               fourier_filtering, Nt, fs, b, a, loc_save, itime_save, save_ver, gridded, tf_phase_nightglow, dir_save)#,
                             #    dphase_att_ampl_dz, zatt, zrange)
 
 
@@ -1160,7 +1171,7 @@ def worker_func_dayglow(i):
     # location = list_of_locations[i]
     return dayglow_at_location(i, list_of_locations, fft_uzs, att_exp, amplification, 
                                phase_shift_z, Nt, z_4_28_calc_m, fac_temperature, f_VER_4_28, f_dVER_4_28,
-                               loc_save, itime_save, gridded, dir_save)
+                               loc_save, itime_save, save_ver, gridded, dir_save)
 
 
 # =========================================================================================================
@@ -1223,7 +1234,8 @@ class AirglowSignal:
         ### Definitions for the calculation of 4_28 micrometer nightglow         
         self.alpha_t = 0.01    ### VERY IMPORTANT: 1% sensitivity to temperature variations 
         # self.z_4_28_calc_m = np.linspace(self.z_4_28_min, self.z_4_28_max, self.Nz)  # in meters, always
-        self.z_4_28_calc_m = np.linspace(110e3, 160e3, self.Nz)  # in meters, always  
+        # self.z_4_28_calc_m = np.linspace(110e3, 160e3, self.Nz)  # in meters, always  
+        self.z_4_28_calc_m = np.linspace(90e3, 160e3, self.Nz)  # in meters, always  
         self.z_4_28_calc_km = self.z_4_28_calc_m / 1e3        
         self.dz_4_28_m = np.diff(self.z_4_28_calc_m)[0]
         ### For calculation of cumulated attenuation: 
@@ -1238,36 +1250,6 @@ class AirglowSignal:
             return(Ep)
         elif dir=="W_to_ps":
             return(1/Ep)
-        else: 
-            raise("Wrong conversion specified.")
-
-
-    def _factor_W_to_Rayleigh(self, L, bandwidth = 0.03, dir="specRadiance_to_Rayleigh"):
-        ### bandwidth should be in micrometer if Radiance is in W/m2/micrometer/sr
-        ### Note: In B Kenda's thesis, its 4pi.(Ep)^-1 and not (4pi.Ep)⁻1 that is correct.
-        ### Correct definition of the Rayleigh: 1R = (1/4pi) * 1e10 photons/s/cm2/steradians 
-        Ep = self.hp*self.c/(L*1e-6)    #### Energy of photon at wavelength L 
-
-        if dir=="specRadiance_to_Rayleigh":
-            ### If radiance is initially in W/m2/micrometer/sr 
-            factor = bandwidth/Ep*4*np.pi*1e-10 
-            return(factor)
-        elif dir=="Radiance_to_Rayleigh":
-            ### If radiance is initially in W/m2/sr 
-            factor = 1/Ep*4*np.pi*1e-10 
-            return(factor)
-        elif dir=="phRadiance_to_Rayleigh":
-            ### If radiance is initially in ph/s/m2/sr 
-            factor = 4*np.pi*1e-10 
-            return(factor)
-        elif dir=="Rayleigh_to_Radiance":
-            ### Radiance will be in W/m2/sr 
-            factor = 1/Ep*4*np.pi*1e-10 
-            return(1/factor)
-        elif dir=="Rayleigh_to_specRadiance":
-            ### Radiance will be in W/m2/micrometer/sr 
-            factor = bandwidth/Ep*4*np.pi*1e-10 
-            return(1/factor)
         else: 
             raise("Wrong conversion specified.")
     
@@ -1498,7 +1480,8 @@ class AirglowSignal:
     def _load_absorption_amplification(self, file_attenuation_kenda=None, dir_attenuation_GA=None, do_plot=False, disable_att=False):
 
         if file_attenuation_kenda is not None:
-            print("Using Balthasar Kenda's attenuation data")
+            if not disable_att:
+                print("Using Balthasar Kenda's attenuation data")
             ### Then define a function to go from vz_surface to vz_z (amplification + attenuation)
             atten = pd.read_csv(file_attenuation_kenda, header=[0])
             alts = atten.alt.unique()*1e3  ### ALTITUDES ALWAYS IN METER ! 
@@ -1534,7 +1517,8 @@ class AirglowSignal:
             f_amplification = interpolate.interp1d(alts, amplification, kind='quadratic')
 
         elif dir_attenuation_GA is not None:
-            print("Using Gil Averbuch's attenuation data")
+            if not disable_att:
+                print("Using Gil Averbuch's attenuation data")
             files_unsorted = [dir_attenuation_GA + f for f in os.listdir(dir_attenuation_GA)]
             freq_unsorted = [float(f.split("Hz.csv")[0]) for f in os.listdir(dir_attenuation_GA)]
 
@@ -1582,6 +1566,7 @@ class AirglowSignal:
                 return( np.sqrt(self.f_rho(0)*self.f_c(0)/ (self.f_rho(z)*self.f_c(z))) )
             
         if disable_att: 
+            print("Attenuation disabled")
             ### Set alpha to zero everywhere 
             f_alpha = interpolate.interp1d(freq, alpha_Npm*0, axis=1, bounds_error=False, fill_value=0.0)
             f_alpha_2d = interpolate.RegularGridInterpolator((alts,freq), alpha_Npm*0, method='linear',fill_value=0, bounds_error=False)
@@ -1656,7 +1641,7 @@ class AirglowSignal:
 
 
     def calculate_1_27_airglow(self, list_ieast, list_inorth, loc_save_idx=None, loc_save_EN = None, 
-                               time_save = None, fourier_filtering=False, 
+                               time_save = None, save_ver = True, fourier_filtering=False, 
                                n_cpus=10, do_parallel=True, tmax=2500, dir_save="./results/"):
         ### NOTE: To avoid mistakes in gradients, 
         ### all the calculations are done with z in METERS 
@@ -1688,7 +1673,8 @@ class AirglowSignal:
             time_save = self.t_new[::int(self.Nt//10)]
 
         itime_save = [np.where(abs(self.t_new-tw)<self.dt/2)[0][0] for tw in time_save]
-        save_wavefield = np.zeros((self.Ne, self.Nn, self.Nz, len(time_save),2 ))
+        if save_ver:
+            save_wavefield = np.zeros((self.Ne, self.Nn, self.Nz, len(time_save),2 ))
         save_intensity_dver = np.zeros((self.Ne, self.Nn,len(time_save)))
 
         ### We pad seismograms in time: 
@@ -1811,16 +1797,17 @@ class AirglowSignal:
                 #                                                                 fft_vzs, fourier_filtering, 
                 #                                                                 save_wavefield, save_intensity_dver, 
                 #                                                                 loc_save, itime_save)
-                vz_z_it, dver_z_it, amp_nightglow_it = nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, self.att_exp, self.amplification, 
+                results = nightglow_at_location(i_en, list_of_locations, fft_vzs, fft_uzs, self.att_exp, self.amplification, 
                                                                           self.phase_shift_z,self.f_VER_1_27,self.f_dVER_1_27,
                                                                         self.z_1_27_calc_m, fourier_filtering, self.Nt, 1/self.dt,self.b, self.a, 
-                                                                        loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow, dir_save)#,
+                                                                        loc_save_idx, itime_save, save_ver, self.gridded, self.tf_phase_nightglow, dir_save)#,
                                                                         # dphase_att_ampl_dz, zatt, zrange)
                 
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
-                save_wavefield[i_east, i_north, :,:,0] = vz_z_it    ### Save velocity waveform 
-                save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
-                save_intensity_dver[i_east, i_north,:] = amp_nightglow_it  ### Save Intensity at altitude z
+                if save_ver:
+                    save_wavefield[i_east, i_north, :,:,0] = results[0]#vz_z_it        ### Save velocity waveform 
+                    save_wavefield[i_east, i_north, :,:,1] = results[1]#dver_z_it      ### Save dVER at altitude z 
+                save_intensity_dver[i_east, i_north,:] = results[-1]#amp_nightglow_it  ### Save Intensity at altitude z
 
             # t2 = ptime.time()
             # print(t2-t1)
@@ -1837,7 +1824,7 @@ class AirglowSignal:
                                                       self.att_exp, self.amplification, self.phase_shift_z,
                                                     self.f_VER_1_27, self.f_dVER_1_27, self.z_1_27_calc_m, fourier_filtering,self.Nt, 1/self.dt,
                                                     self.b, self.a, 
-                                                    loc_save_idx, itime_save, self.gridded, self.tf_phase_nightglow, dir_save)#,
+                                                    loc_save_idx, itime_save, save_ver, self.gridded, self.tf_phase_nightglow, dir_save)#,
                                                     # dphase_att_ampl_dz, 
                                                     # zatt, zrange)
                                                 ) as p:
@@ -1852,23 +1839,26 @@ class AirglowSignal:
             for i_en, r in enumerate(tqdm(results, total=len(results), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ) ):
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
                     
-                vz_z_it = r[0]
-                dver_z_it = r[1]
-                amp_nightglow_it = r[2]
-                save_wavefield[i_east, i_north, :,:,0] = vz_z_it         ### Save velocity waveform at all requested altitudes and times
-                save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at all requested altitudes and times
+                if save_ver:
+                    vz_z_it = r[0]
+                    dver_z_it = r[1]
+                    save_wavefield[i_east, i_north, :,:,0] = vz_z_it         ### Save velocity waveform at all requested altitudes and times
+                    save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at all requested altitudes and times
+                
+                amp_nightglow_it = r[-1]
                 save_intensity_dver[i_east, i_north,:] = amp_nightglow_it  ### Save Intensity at requested times  
 
             
         ### Save the full wavefield, but only at certain times 
         print("Saving gridded wavefield...")
-        np.save(dir_save + "nightglow_dver_t", save_wavefield)
+        if save_ver:
+            np.save(dir_save + "nightglow_dver_t", save_wavefield)
         np.save(dir_save + "nightglow_I_t", save_intensity_dver)
         print("Grid save completed.")
 
 
     def calculate_4_28_airglow(self, list_ieast, list_inorth, loc_save_idx=None, loc_save_EN = None,
-                                 time_save = None, 
+                                 time_save = None, save_ver=True,
                                  n_cpus=10, do_parallel=True, tmax=2500, dir_save="./results/"):
         ### NOTE: To avoid mistakes in gradients, 
         ### all the calculations are done with z in METERS 
@@ -1901,7 +1891,8 @@ class AirglowSignal:
             time_save = self.t_new[::int(self.Nt//10)]
 
         itime_save = [np.where(abs(self.t_new-tw)<self.dt/2)[0][0] for tw in time_save]
-        save_wavefield = np.zeros((self.Ne, self.Nn, self.Nz, len(time_save),2 ))
+        if save_ver:
+            save_wavefield = np.zeros((self.Ne, self.Nn, self.Nz, len(time_save),2 ))
         save_intensity_dver = np.zeros((self.Ne, self.Nn,len(time_save)))
 
         ### We pad seismograms in time: 
@@ -1975,13 +1966,17 @@ class AirglowSignal:
             t0=ptime.time()
             for i_en in tqdm(list_indices, total=len(list_ieast), disable=False):
                 # i_en = 3360
-                uz_z_it, dver_z_it, amp_dayglow_it = dayglow_at_location(i_en, list_of_locations, fft_uzs, self.att_exp, self.amplification, 
+                results = dayglow_at_location(i_en, list_of_locations, fft_uzs, self.att_exp, self.amplification, 
                                                                           self.phase_shift_z, self.Nt, self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, self.f_dVER_4_28, 
-                                                                          loc_save_idx, itime_save, self.gridded, dir_save)
+                                                                          loc_save_idx, itime_save, save_ver, self.gridded, dir_save)
                 
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
-                save_wavefield[i_east, i_north, :,:,0] = uz_z_it    ### Save dispalcement waveform 
-                save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
+                if save_ver:
+                    uz_z_it, dver_z_it = results[0], results[1]
+                    save_wavefield[i_east, i_north, :,:,0] = uz_z_it    ### Save dispalcement waveform 
+                    save_wavefield[i_east, i_north, :,:,1] = dver_z_it  ### Save dVER at altitude z 
+                
+                amp_dayglow_it = results[-1]
                 save_intensity_dver[i_east, i_north,:] = amp_dayglow_it  ### Save Intensity at altitude z
 
             t2 = ptime.time()
@@ -1996,7 +1991,8 @@ class AirglowSignal:
             with get_context("fork").Pool(processes=n_cpus,
                                             initializer=init_worker_dayglow,
                                             initargs=(list_of_locations, fft_uzs, self.att_exp, self.amplification, self.phase_shift_z, self.Nt,
-                                                    self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, self.f_dVER_4_28, loc_save_idx, itime_save, self.gridded, dir_save)
+                                                    self.z_4_28_calc_m, self.fac_temperature, self.f_VER_4_28, self.f_dVER_4_28, loc_save_idx, 
+                                                    itime_save, save_ver, self.gridded, dir_save)
                                                 ) as p:
                 
                 results = list(tqdm(p.imap(worker_func_dayglow, list_indices), total=len(list_indices), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ))
@@ -2009,17 +2005,20 @@ class AirglowSignal:
             for i_en, r in enumerate(tqdm(results, total=len(results), bar_format='{l_bar}{bar:40}{r_bar}{bar:-40b}' ) ):
                 i_east, i_north = list_of_locations[i_en][0], list_of_locations[i_en][1]
                     
-                uz_z_it = r[0]
-                dver_z_it = r[1]
-                amp_airglow_it = r[2]
-                save_wavefield[i_east, i_north, :,:,0] = uz_z_it         ### Save displacement waveform at all requested altitudes and times
-                save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at all requested altitudes and times
+                if save_ver:
+                    uz_z_it = r[0]
+                    dver_z_it = r[1]
+                    save_wavefield[i_east, i_north, :,:,0] = uz_z_it         ### Save displacement waveform at all requested altitudes and times
+                    save_wavefield[i_east, i_north, :,:,1] = dver_z_it       ### Save dVER at all requested altitudes and times
+                
+                amp_airglow_it = r[-1]
                 save_intensity_dver[i_east, i_north,:] = amp_airglow_it  ### Save Intensity at requested times  
 
             
         ### Save the full wavefield, but only at certain times 
         print("Saving gridded dayglow wavefield...")
-        np.save(dir_save + "dayglow_dver_t", save_wavefield)
+        if save_ver:
+            np.save(dir_save + "dayglow_dver_t", save_wavefield)
         np.save(dir_save + "dayglow_I_t", save_intensity_dver)
         print("Grid save completed.")
     
@@ -2755,7 +2754,7 @@ class AirglowSignal:
 ### New AIRGLOW SCALER 
 # =========================================================================================================
 def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True, effect=None, tit ="", 
-                               store_ids_dists = [('GF_venus_Cold100_atten_qssp_nearfield',0e3,500e3),('GF_venus_Cold100_atten_qssp_grid',500e3,8000e3)]):
+                               store_ids_dists = [('GF_venus_Cold100_atten_qssp_nearfield',0e3,50e3),('GF_venus_Cold100_atten_qssp',50e3,8000e3)]):
     '''
     We calculate airglow signals for a series of receiver locations and source depths. 
     '''
@@ -2768,6 +2767,7 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
     Np = 1+ int(2*max_grid_dist/delta_dist)
     north_shifts  = np.linspace(-max_grid_dist, max_grid_dist, Np, endpoint=True)[::10]
     east_shifts   = np.linspace(-max_grid_dist, max_grid_dist, Np, endpoint=True)[::10]
+    Ntr = east_shifts.size*north_shifts.size 
     
     ### Source depths 
     delta_depth = 5e3
@@ -2827,6 +2827,139 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
     ### We first load the airglow class
     AIRGLOW = AirglowSignal(SEISMO, Nz=500)
 
+    ### Now we compute the AIRGLOW at all locations and timesteps. 
+    ### NOTE : This can be quite heavy ! 
+    ### List of all north and east indices:
+    dir_save="./results_detectability/"
+    if not os.path.exists(dir_save):
+        os.makedirs(dir_save)
+    list_inorth, list_ieast = AIRGLOW.iNN, AIRGLOW.iEE
+
+    def airglow_scaler_calculation(AIRGLOW):
+        ### Calculation of the Nightglow
+        AIRGLOW.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[],
+                                    do_parallel=True, 
+                                    fourier_filtering=False,   ### Use time filtering 
+                                    dir_save = dir_save,
+                                    save_ver = False,          ### Faster if we save only I(lat, lon, t)
+                                    time_save = AIRGLOW.t_new) ### Save all timesteps 
+        ### Calculation of the Dayglow
+        AIRGLOW.calculate_4_28_airglow(list_ieast, list_inorth, loc_save_idx=[],
+                                    do_parallel=True, 
+                                    dir_save=dir_save, 
+                                    save_ver = False,          ### Faster if we save only I(lat, lon, t)
+                                    time_save = AIRGLOW.t_new) ### Save all timesteps 
+
+        I_nightglow = np.load(dir_save + "nightglow_I_t.npy")
+        I_dayglow = np.load(dir_save + "dayglow_I_t.npy")
+        
+        ### ==========================================================================================================
+        ### FIGURE: We make some frequency bins 
+        # freq_bins = np.logspace(np.log10(1e-3), np.log10(5e-1), 5)
+        fmean = [10**-3, 10**-2, 10**-1, 10**0]
+        freq_bins = [None, 10**-2.5, 10**-1.5, 10**-0.5, None]  ### Centered around 1e-2, 1e-1, 1. 
+        f_targets = []
+        for _, (binleft, binright) in enumerate(zip(freq_bins[:-1], freq_bins[1:])):
+            f_targets += [[binleft, binright]]
+        print(" Filter bins: ", f_targets)
+
+        scaling_airglow = pd.DataFrame()
+        ### We loop over locations and store the max amplitude in a dataframe: 
+        for f1, f2 in tqdm(f_targets, disable=True):
+
+            ### To scale with the velocity amplitude in each freq, band 
+            waveform_vel_filt = butter_filter(AIRGLOW.VEL, 1/dt_airglow, f1,f2, order=5, axis=2)
+            
+            waveform_nightglow_filt = butter_filter(I_nightglow, 1/dt_airglow, f1,f2, order=5, axis=2)
+            perturb_nightglow_filt = waveform_nightglow_filt/AIRGLOW.I_background_nightglow/\
+                                    np.max(abs(waveform_vel_filt), axis=2)[:,:,None] * 100
+
+            waveform_dayglow_filt = butter_filter(I_dayglow, 1/dt_airglow, f1,f2, order=5, axis=2)
+            perturb_dayglow_filt = waveform_dayglow_filt/AIRGLOW.I_background_dayglow/\
+                                    np.max(abs(waveform_vel_filt), axis=2)[:,:,None] * 100
+
+            for (ies, ins) in zip(AIRGLOW.iEE.ravel(), AIRGLOW.iNN.ravel()):
+                es, ns = AIRGLOW.EE[ies, ins], AIRGLOW.NN[ies,ins]
+                loc_dict = dict(ns=ns, es=es, 
+                                f1=f1 if f1 is not None else 0, 
+                                f2=f2 if f2 is not None else 1., 
+                                nightglow=abs(perturb_nightglow_filt[ies, ins,:]).max(),
+                                dayglow=abs(perturb_dayglow_filt[ies, ins,:]).max())
+                # dayglow=abs(waveform_dayglow).max()
+                scaling_airglow = pd.concat([scaling_airglow, pd.DataFrame([loc_dict])])
+
+        ### Calculate statistics 
+        scaling_nightglow_plot = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].median().reset_index()
+        scaling_nightglow_plot['nightglow_q25'] = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].quantile(q=0.25).reset_index()['nightglow']
+        scaling_nightglow_plot['nightglow_q75'] = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].quantile(q=0.75).reset_index()['nightglow']
+        ###
+        scaling_dayglow_plot = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].median().reset_index()
+        scaling_dayglow_plot['dayglow_q25'] = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].quantile(q=0.25).reset_index()['dayglow']
+        scaling_dayglow_plot['dayglow_q75'] = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].quantile(q=0.75).reset_index()['dayglow']
+
+        scaling_nightglow_plot.to_csv(dir_save + "nightglow_scaler"+tit + ".csv", header=True, index=False)
+        scaling_dayglow_plot.to_csv(dir_save + "dayglow_scaler"+tit + ".csv", header=True, index=False)
+
+        return(fmean, scaling_nightglow_plot, scaling_dayglow_plot)
+    
+
+    def plot_scaler(fmean, scaling_nightglow_plot, scaling_dayglow_plot):
+        fig, ax = plt.subplots()
+
+        ax.plot(fmean, scaling_nightglow_plot.nightglow, 
+                color='forestgreen', marker="s", label=r"1.27$\mu m$ Nightglow")
+        ax.fill_between(fmean, 
+                        scaling_nightglow_plot.nightglow_q25, scaling_nightglow_plot.nightglow_q75,
+                        color='forestgreen', alpha=0.3)
+        ax.plot(fmean, scaling_dayglow_plot.dayglow, 
+                color='orangered', marker="s", label=r"4.28$\mu m$ Dayglow")
+        ax.fill_between(fmean, 
+                        scaling_dayglow_plot.dayglow_q25, scaling_dayglow_plot.dayglow_q75,
+                        color='orangered', alpha=0.3)
+        
+        ax.legend(frameon=False)
+        ax.set_yscale('log')
+        ax.set_xscale('log')
+        ax.set_xlabel("Frequency / [$Hz$]")
+        ax.set_ylabel(r"Airglow Intensity perturbation [$\%/(1\,m/s)$]")
+        ax.set_title("Intensity perturbation for 1 $m/s$ peak velocity at the ground surface")
+        
+        fig.savefig(dir_save + "Airglow_scaler"+ tit + ".png", dpi=300)
+    
+
+    def plot_scaler_ampl(fmean, ng, dg, ng_min, dg_min, ng_max, dg_max):
+        fig, ax = plt.subplots()
+
+        ax.plot(fmean, ng.nightglow, 
+                color='forestgreen', marker="s", label=r"1.27$\mu m$ Nightglow")
+        ax.fill_between(fmean, ng.nightglow_q25, ng.nightglow_q75,
+                        color='forestgreen', alpha=0.3)
+        ax.plot(fmean, dg.dayglow, 
+                color='orangered', marker="s", label=r"4.28$\mu m$ Dayglow")
+        ax.fill_between(fmean, dg.dayglow_q25, dg.dayglow_q75,
+                        color='orangered', alpha=0.3)
+        
+        ax.plot(fmean, ng_min.nightglow, color='grey', marker="v", ls="--", label=r"Minimum Amplification")
+        ax.fill_between(fmean, ng_min.nightglow_q25, ng_min.nightglow_q75,color='grey', alpha=0.2)
+        ax.plot(fmean, dg_min.dayglow, color='grey', marker="v", ls ="--")
+        ax.fill_between(fmean, dg_min.dayglow_q25, dg_min.dayglow_q75,color='grey', alpha=0.2)
+        ###
+        ax.plot(fmean, ng_max.nightglow, color='grey', marker="^", ls=":", label=r"Maximum Amplification")
+        ax.fill_between(fmean, ng_max.nightglow_q25, ng_max.nightglow_q75,color='grey', alpha=0.2)
+        ax.plot(fmean, dg_max.dayglow, color='grey', marker="^", ls =":")
+        ax.fill_between(fmean, dg_max.dayglow_q25, dg_max.dayglow_q75,color='grey', alpha=0.2)
+
+        ax.legend(frameon=False)
+        ax.set_yscale('log')
+        ax.set_xscale('log')
+        ax.set_xlabel("Frequency / [$Hz$]")
+        ax.set_ylabel(r"Airglow Intensity perturbation [$\%/(1\,m/s)$]")
+        ax.set_title("Intensity perturbation for 1 $m/s$ peak velocity at the ground surface")
+        
+        fig.savefig(dir_save + "Airglow_scaler_amplification.png", dpi=300)
+        fig.savefig(dir_save + "Airglow_scaler_amplification.pdf")
+
+        
     if effect=="ampl":
         ### We open various atmospheric profiles for density
         dens_files = np.load("/staff/marouchka/Documents/VCD_Results/QB_detectability_data/density_fromtopo.npy")
@@ -2836,17 +2969,26 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
         lat_files = np.load("/staff/marouchka/Documents/VCD_Results/QB_detectability_data/latitude.npy")
         lon_files = np.load("/staff/marouchka/Documents/VCD_Results/QB_detectability_data/longitude.npy")
         shape = dens_files.shape[:2]
-        print(ltst_files.shape)
         dens_files = dens_files.reshape((-1, dens_files.shape[2]))
         ltst_files = ltst_files.reshape((-1, ltst_files.shape[2]))
         soundspeed_files = soundspeed_files.reshape((-1, soundspeed_files.shape[2]))
         ampl = np.sqrt( (dens_files[:,0][:,None]*soundspeed_files[:,0][:,None])/ (dens_files*soundspeed_files))
 
+        ### ===========================================================
         fig,ax = plt.subplots() 
         for i in range(dens_files.shape[0]):
             #ax.plot(dens_files[i,:],alt_files/1e3, c="k", alpha=0.2)
             ax.plot(ampl[i,:],alt_files/1e3, c="grey", alpha=0.05)
-        ax.plot(AIRGLOW.f_amplification(alt_files), alt_files/1e3, c="k", label="From BK")
+        ax.plot(AIRGLOW.f_amplification(alt_files), alt_files/1e3, c="k", label="Original")
+        ax.set_title("")
+        ax.set_xlim(1,1e8)
+        ax.set_ylim(1,200)
+        fig.tight_layout()
+        fig.savefig(dir_save + "amplification.png", dpi=300)
+        fig.savefig(dir_save + "amplification.pdf")
+        ### ===========================================================
+        
+
         imax = np.argmax(ampl[:,-1])
         imin = np.argmin(ampl[:,-1])
         idx_min = np.unravel_index(imin, shape)
@@ -2855,7 +2997,6 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
         print("Amplification maximum for Lon={:.1f}, Lat={:.1f}, at LTST={:.1f}h".format(lon_files[idx_max[0]], lon_files[idx_max[1]], ltst_files[imax,0] ) )
         # Amplification minimum for Lon=30.0, Lat=5.0, at LTST=14.4h
         # Amplification maximum for Lon=-135.0, Lat=-15.0, at LTST=1.4h
-
 
         prof_ampl_min = ampl[imin,:]
         prof_ampl_max = ampl[imax,:]
@@ -2872,40 +3013,585 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
         # np.save("./data/amplification_min", prof_ampl_min)
         # np.save("./data/amplification_max", prof_ampl_max)
         # quit()
+        ### STORE ORIGINAL AMPLIFICATION 
+        fampl = AIRGLOW.f_amplification
+
         ### Do MIN 
-        # AIRGLOW.f_amplification = interpolate.interp1d(alt_files, prof_ampl_min, kind='quadratic')
-        # tit = "ampli_min"
+        AIRGLOW.f_amplification = interpolate.interp1d(alt_files, prof_ampl_min, kind='quadratic')
+        tit = "ampli_min"
+        fmean, scaling_nightglow_plot_ampli_min, scaling_dayglow_plot_ampli_min = airglow_scaler_calculation(AIRGLOW)
         ### Do MAX 
-        # AIRGLOW.f_amplification = interpolate.interp1d(alt_files, prof_ampl_max, kind='quadratic')
-        # tit = "ampli_max"
-        print(tit)
+        AIRGLOW.f_amplification = interpolate.interp1d(alt_files, prof_ampl_max, kind='quadratic')
+        tit = "ampli_max"
+        fmean, scaling_nightglow_plot_ampli_max, scaling_dayglow_plot_ampli_max = airglow_scaler_calculation(AIRGLOW)
+        ### Do ORIG 
+        AIRGLOW.f_amplification = fampl
+        tit = "ampli"
+        fmean, scaling_nightglow_plot_ampli, scaling_dayglow_plot_ampli = airglow_scaler_calculation(AIRGLOW)
+        
+        plot_scaler_ampl(fmean, scaling_nightglow_plot_ampli, scaling_dayglow_plot_ampli, 
+                         scaling_nightglow_plot_ampli_min, scaling_dayglow_plot_ampli_min, 
+                         scaling_nightglow_plot_ampli_max, scaling_dayglow_plot_ampli_max)
+    else:
+        fmean, scaling_nightglow_plot, scaling_dayglow_plot = airglow_scaler_calculation(AIRGLOW)
+        if do_plot:
+            plot_scaler(fmean, scaling_nightglow_plot, scaling_dayglow_plot)
+
+  
+    def airglow_scaler_test1(do_fig_spectrum=False):
+
+        ### ==========================================================================================================
+        ### OTHER OPTION: Filter velocity before calculating Airglow 
+        ### Then calculate the max intensity 
+        fmean = [10**-3, 10**-2, 10**-1, 10**0]
+        freq_bins = [None, 10**-2.5, 10**-1.5, 10**-0.5, None]  ### Centered around 1e-2, 1e-1, 1. 
+        f_targets = []
+        for _, (binleft, binright) in enumerate(zip(freq_bins[:-1], freq_bins[1:])):
+            f_targets += [[binleft, binright]]
+        print(" Filter bins: ", f_targets)
+        store_Imax_ng = []
+        store_Imax_dg = []
+        for f1, f2 in tqdm(f_targets, disable=True):
+
+            ### To scale with the velocity amplitude in each freq, band 
+            waveform_vel_filt = butter_filter(AIRGLOW.VEL, 1/dt_airglow, f1,f2, order=5, axis=2).reshape(Ntr,AIRGLOW.Nt)
+            
+            waveform_nightglow_filt = butter_filter(I_nightglow, 1/dt_airglow, f1,f2, order=5, axis=2).reshape(Ntr,AIRGLOW.Nt)
+            sensmax_nightglow_filt = np.max(abs(waveform_nightglow_filt), axis=1)/AIRGLOW.I_background_nightglow/\
+                                    np.max(abs(waveform_vel_filt), axis=1) * 100
+
+            waveform_dayglow_filt = butter_filter(I_dayglow, 1/dt_airglow, f1,f2, order=5, axis=2).reshape(Ntr,AIRGLOW.Nt)
+            sensmax_dayglow_filt = np.max(abs(waveform_dayglow_filt), axis=1)/AIRGLOW.I_background_dayglow/\
+                                    np.max(abs(waveform_vel_filt), axis=1)* 100
+
+            ### TO RECALCULATE USING FILTERED WAVE ======================================
+            # VEL_filt = butter_filter(AIRGLOW.VEL, 1/dt_airglow, f1,f2, order=5, axis=2)
+            # DIS_filt = butter_filter(AIRGLOW.DIS, 1/dt_airglow, f1,f2, order=5, axis=2)
+            
+            # ### Normalize all the velocity traces to 1: 
+            # mvel = np.max(np.abs(VEL_filt), axis=2)
+            # SEISMO.VEL = VEL_filt/mvel[:,:,None] 
+            # SEISMO.DIS = DIS_filt/mvel[:,:,None]
+
+            # Vfilt = VEL_filt.reshape(Ntr, AIRGLOW.Nt)
+            # Vfilt = Vfilt / mvel.reshape(Ntr)[:,None]
+
+            # AIRGLOW_filt = AirglowSignal(SEISMO, Nz=500)
+            # dir_save_filt="./results_detectabilityf/"
+            # if not os.path.exists(dir_save_filt):
+            #     os.makedirs(dir_save_filt)
+            # list_inorth, list_ieast = AIRGLOW_filt.iNN, AIRGLOW_filt.iEE
+            # ### Calculation of the Nightglow
+            # AIRGLOW_filt.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[],
+            #                                do_parallel=True, 
+            #                                fourier_filtering=False,   ### Use time filtering 
+            #                                dir_save = dir_save_filt,
+            #                                save_ver = False,          ### Faster if we save only I(lat, lon, t)
+            #                                time_save = AIRGLOW_filt.t_new) ### Save all timesteps 
+            # ### Calculation of the Dayglow
+            # AIRGLOW_filt.calculate_4_28_airglow(list_ieast, list_inorth, loc_save_idx=[],
+            #                                do_parallel=True, 
+            #                                dir_save=dir_save_filt, 
+            #                                save_ver = False,          ### Faster if we save only I(lat, lon, t)
+            #                                time_save = AIRGLOW_filt.t_new) ### Save all timesteps 
+            # ### Now we recover the max intensity 
+            # I_nightglow_filt = np.load(dir_save_filt + "nightglow_I_t.npy").reshape(Ntr,AIRGLOW_filt.Nt)
+            # I_dayglow_filt = np.load(dir_save_filt + "dayglow_I_t.npy").reshape(Ntr,AIRGLOW_filt.Nt)
+
+            # sensmax_nightglow_filt = np.max(abs(I_nightglow_filt), axis=1)/AIRGLOW_filt.I_background_nightglow/\
+            #                          np.max(abs(Vfilt), axis=1) * 100
+            # sensmax_dayglow_filt = np.max(abs(I_dayglow_filt), axis=1)/AIRGLOW_filt.I_background_dayglow/\
+            #                          np.max(abs(Vfilt), axis=1) * 100
+
+            store_Imax_ng.append(sensmax_nightglow_filt)
+            store_Imax_dg.append(sensmax_dayglow_filt)
+        store_Imax_ng = np.array(store_Imax_ng)
+        store_Imax_dg = np.array(store_Imax_dg)
+
+        if do_fig_spectrum:
+            ### ==========================================================================================================
+            ### FIGURE 1: Look at the ratio of airglow spectra to velocity spectra 
+            fr = np.fft.rfftfreq(n=AIRGLOW.t_new.size, d=dt_airglow)[1:]
+            sp = abs(np.fft.rfft(AIRGLOW.VEL, axis=2))[:,:,1:].reshape(Ntr, fr.size)         ### Ground Velocity spectrum
+            spin = abs(np.fft.rfft(I_nightglow, axis=2))[:,:,1:].reshape(Ntr, fr.size)       ### Nightglow spectrum
+            spid = abs(np.fft.rfft(I_dayglow, axis=2))[:,:,1:].reshape(Ntr, fr.size)         ### Dayglow spectrum 
+
+            fig, ((ax1, ax2, ax3),(ax5,ax4,ax6)) = plt.subplots(2,3, figsize=(13,8)) 
+            sens_ng = spin/AIRGLOW.I_background_nightglow/sp*100
+            sens_dg = spid/AIRGLOW.I_background_dayglow/sp*100
+            ###
+            ax1b = ax1.twinx()
+            for es in range(Ntr):
+                ax1.plot(fr, spin[es,:], c="forestgreen", lw=0.5, alpha=0.01)
+                ax1.plot(fr, spid[es,:], c="orangered", lw=0.5, alpha=0.01)
+                ax1b.plot(fr, sp[es,:], c="k", lw=0.1, alpha=0.01)
+            ax1.plot(fr, np.median(spin, axis=0), c="forestgreen", lw=1.5,label="Nightglow")
+            ax1.plot(fr, np.median(spid, axis=0), c="orangered", lw=1.5,label="Dayglow")
+            ax1b.plot(fr, np.median(sp, axis=0), c="k", lw=1.5,label="Ground Velocity")
+            ax1.plot([],[], c="k", lw=1.5,label="Ground Velocity")
+            ax1.set_xscale("log")
+            ax1.set_yscale("log")
+            ax1b.set_xscale("log")
+            ax1b.set_yscale("log")
+            ax1.grid(ls =":")
+            ax1.set_xlabel(r"Frequency / [$Hz$]")
+            ax1.set_ylabel(r"Intensity / [$R$]")
+            ax1b.set_ylabel(r"Velocity / [$m\cdot s^{-1}$]")
+            ax1.legend(framealpha=1, edgecolor="none", loc=3) 
+            ax1.set_xlim(8e-4, 1.2)
+            ###
+            ax2.fill_between(fr, np.min(sens_dg, axis=0), np.max(sens_dg, axis=0), color="orangered", alpha=0.3)
+            ax2.fill_between(fr, np.min(sens_ng, axis=0), np.max(sens_ng, axis=0), color="forestgreen", alpha=0.3)
+            ax2.plot(fr, np.median(sens_ng, axis=0), color="forestgreen", lw=1.5, label="Nightglow")
+            ax2.plot(fr, np.median(sens_dg, axis=0), color="orangered", lw=1.5, label="Dayglow")
+            for es in range(Ntr):
+                ax2.plot(fr, sens_ng[es,:], c="k", lw=0.1, alpha=0.01)
+                ax2.plot(fr, sens_dg[es,:], c="k", lw=0.1, alpha=0.01)
+            ax2.set_xscale("log")
+            ax2.set_yscale("log")
+            ax2.set_xlabel(r"Frequency / [$Hz$]")
+            ax2.set_ylabel(r"Sensitivity / [$\%/(m\cdot s^{-1})$]")
+            ax2.grid(ls =":")
+            ax2.legend(framealpha=1, edgecolor="none", loc=3) 
+            ax2.set_xlim(8e-4, 1.2)
+            ax2.set_ylim(1e-3, 1e7)
+            ###
+            f_targetse = np.array(f_targets).T
+            f_targetse[0,0] = 1e-4
+            f_targetse[1,-1] = 1e4
+            f_targetse[0,:] = fmean - f_targetse[0,:] 
+            f_targetse[1,:] = f_targetse[1,:] - fmean
+            # ax3.fill_between(fmean, np.min(store_Imax_dg, axis=1), np.max(store_Imax_dg, axis=1), color="orangered", alpha=0.3)
+            # ax3.fill_between(fmean, np.min(store_Imax_ng, axis=1), np.max(store_Imax_ng, axis=1), color="forestgreen", alpha=0.3)
+            ax3.fill_between(fmean, np.quantile(store_Imax_dg, q=0.25, axis=1), np.quantile(store_Imax_dg, q=0.75, axis=1), color="orangered", alpha=0.3)
+            ax3.fill_between(fmean, np.quantile(store_Imax_ng, q=0.25, axis=1), np.quantile(store_Imax_ng, q=0.75, axis=1), color="forestgreen", alpha=0.3)
+            ax3.errorbar(fmean, np.median(store_Imax_ng, axis=1), xerr=f_targetse, color="forestgreen", lw=1.5, label="Nightglow", marker="s")
+            ax3.errorbar(fmean, np.median(store_Imax_dg, axis=1), xerr=f_targetse, color="orangered", lw=1.5, label="Dayglow", marker="s")
+            ax3.set_xscale("log")
+            ax3.set_yscale("log")
+            ax3.set_xlabel(r"Frequency of input signal / [$Hz$]")
+            ax3.set_ylabel(r"Max excitation / [$\%/(m\cdot s^{-1})$]")
+            ax3.grid(ls =":")
+            ax3.legend(framealpha=1, edgecolor="none", loc=3)    
+            ax3.set_xlim(8e-4, 1.2)
+            ax3.set_ylim(1e-3, 1e7)
+            ###
+            ### Choose 8 random velocity traces 
+            choice = np.random.choice(Ntr,8)
+            Vshape = AIRGLOW.VEL.reshape(Ntr, AIRGLOW.Nt)
+            for ic, c in enumerate(choice):
+                ax5.plot(AIRGLOW.t_new, Vshape[c,:]/abs(Vshape[c,:]).max() + 2*ic, lw=1, c="k")
+            ax5.set_xlim(AIRGLOW.t_new.min(), AIRGLOW.t_new.max())
+            ax5.set_xlabel(r"Time / [$s$]")
+            ax5.set_ylabel(r"Input velocity traces")
+            ax5.set_yticks([])
+            ###
+            ### Choose random velocity traces and filter them 
+            choice = np.random.choice(Ntr)
+            V = Vshape[choice,:]
+            for fi, (f1, f2) in enumerate(f_targets):
+                ### To scale with the velocity amplitude in each freq, band 
+                Vf = butter_filter(V, 1/dt_airglow, f1,f2, order=5)
+                ax6.plot(AIRGLOW.t_new, Vf/abs(Vf).max() + 2*fi, lw=1, c="k")
+            ax6.set_xlim(AIRGLOW.t_new.min(), AIRGLOW.t_new.max())
+            ax6.set_xlabel(r"Time / [$s$]")
+            ax6.set_ylabel(r"Filtered velocity traces (Example)")
+            ax6.set_yticks([2*fi for fi in range(len(f_targets))])
+            ax6.set_yticklabels(["-- {:.1g} Hz".format(10**-2.5), "{:.1g}--{:.1g} Hz".format(10**-2.5, 10**-1.5), 
+                                "{:.1g}--{:.1g} Hz".format(10**-1.5,10**-0.5), "{:.1g} Hz--".format(10**-0.5)])
+                                # freq_bins = [None, 10**-2.5, 10**-1.5, 10**-0.5, None] 
+
+            ###
+            # ax4.set_axis_off()
+            In = I_nightglow.reshape(Ntr, AIRGLOW.Nt)[choice,:]
+            Id = I_dayglow.reshape(Ntr, AIRGLOW.Nt)[choice,:]
+            for fi, (f1, f2) in enumerate(f_targets):
+                ### To scale with the velocity amplitude in each freq, band 
+                Ifn = butter_filter(In, 1/dt_airglow, f1,f2, order=5)
+                ax4.plot(AIRGLOW.t_new, Ifn/abs(Ifn).max() + 2*fi, lw=1, c="forestgreen")
+                Ifd = butter_filter(Id, 1/dt_airglow, f1,f2, order=5)
+                ax4.plot(AIRGLOW.t_new, Ifd/abs(Ifd).max() + 2*fi, lw=1, c="orangered")
+            ax4.set_xlim(AIRGLOW.t_new.min(), AIRGLOW.t_new.max())
+            ax4.set_xlabel(r"Time / [$s$]")
+            ax4.set_ylabel(r"Filtered airglow traces (Example)")
+            ax4.set_yticks([2*fi for fi in range(len(f_targets))])
+            ax4.set_yticklabels(["-- {:.1g} Hz".format(10**-2.5), "{:.1g}--{:.1g} Hz".format(10**-2.5, 10**-1.5), 
+                                "{:.1g}--{:.1g} Hz".format(10**-1.5,10**-0.5), "{:.1g} Hz--".format(10**-0.5)])
+                                # freq_bins = [None, 10**-2.5, 10**-1.5, 10**-0.5, None] 
+            ###
+            fig.tight_layout()
+            # fig.savefig(dir_save + "Sensitivity_based_on_spectra"+ tit + ".png", dpi=300)
+            # fig.savefig(dir_save + "Sensitivity_based_on_spectra"+ tit + ".pdf")
+            ### ==========================================================================================================
+            
+    # airglow_scaler_test1(do_fig_spectrum=True)
+
+
+
+
+def compute_airglow_scaler_sine(mw=None, strike=45, dip=45, rake=45, do_plot=True, effect=None, tit ="", 
+                               store_ids_dists = [('GF_venus_Cold100_atten_qssp_nearfield',0e3,500e3),('GF_venus_Cold100_atten_qssp',500e3,8000e3)]):
+    '''
+    We calculate airglow sensitivity curves for a sine perturbation. 
+    '''
+
+    freq = np.array([0.01, 0.02, 0.1, 0.2]) ### Hz
+    # freq = np.array([10**-3, 10**-2, 10**-1, 10**0])
+    # freq = np.array([0.4,0.2,0.1]) ### Hz
+    # freq = np.array([0.01]) ### Hz
+    c = 200                 ### m/s
+    dt = 0.1                ### s
+    tf = 1500               ### s
+    # hstart = 90e3           ### m   ### To test Kenda 2018 
+    # ampl_at_start = 5e-3    ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda 2018) 
+    hstart = 100e3          ### m   ### To test Sutin 2018
+    ampl_at_start = 4e-2    ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin 2018) 
+
+    # time = np.arange(-tf/10, tf, dt)
+    time = np.arange(-tf/10, tf, dt)
+    Nt = time.size
+    VEL_ng = np.zeros((1,freq.size, Nt))
+    DIS_ng = np.zeros((1,freq.size, Nt))
+    VEL_dg = np.zeros((1,freq.size, Nt))
+    DIS_dg = np.zeros((1,freq.size, Nt))
+    
+
+    def tapered_sinusoid(t, z, f0, c=200):
+        ### Tapered sinusoid propagating at speed c 
+        sig = np.sin(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.0)
+
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+            sig*=tap
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+                sig[i,:]*=tap
+        return(sig)
+
+    def tapered_sinusoid_dt(t, z, f0, c=200):
+        ### Time derivative of tapered sinusoid
+        sig = 2*np.pi*f0*np.cos(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.0)
+        
+        tap = np.zeros(t.shape)
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+            sig*=tap
+            sig -= np.mean(sig)
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+                sig[i,:]*=tap
+            sig -= np.mean(sig, axis=1)[:,None]
+        return(sig)
+
+    ### To verify that the signal and its derivative is calculated corectly
+    # fig, ax = plt.subplots() 
+    # for fi, f in enumerate(freq):
+    #     ax.plot(time, VEL[0,fi,:])
+    #     # ax.plot(time, tapered_sinusoid(time, hstart, f), ls="--")
+    #     ax.plot(time, tapered_sinusoid_dz(time, hstart, f), ls="--")
+    #     ax.plot(time, np.gradient( tapered_sinusoid(time[None,:], hstart+np.linspace(-1e2,1e2,11)[:,None], f), hstart+np.linspace(-1e2,1e2,11), axis=0 )[5,:] , ls=":")
+    # plt.show() 
+    # quit()
+
+    ### Same for gaussian signal 
+    # fig, ax = plt.subplots() 
+    # for fi, f in enumerate(freq):
+    #     # ax.plot(time, VEL[0,fi,:])
+    #     # ax.plot(time, tapered_gaussian(time, hstart, f), ls="--")
+    #     # ax.plot(time, tapered_gaussian_dz(time, hstart, f), ls="--")
+    #     # ax.plot(time, np.gradient( tapered_gaussian(time[None,:], hstart+np.linspace(-1e2,1e2,11)[:,None], f), hstart+np.linspace(-1e2,1e2,11), axis=0 )[5,:] , ls=":")
+    #     ax.plot(time, tapered_gaussian_dt(time, hstart, f), ls="--")
+    #     ax.plot(time, np.gradient( tapered_gaussian(time, hstart, f), time) , ls=":")
+    # plt.show() 
+    # quit()
+
+
+    ## Construct ground sinusoid for the Nightglow, based on our framework: 
+    for fi, f0 in enumerate(freq):
+        VEL_ng[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
+        DIS_ng[0,fi,:] = integrate.cumulative_trapezoid(tapered_sinusoid(time, 0e3, f0, c=c), time, initial=0)
+
+    ### Construct a Dayglow sinusoid for our framework
+    for fi, f0 in enumerate(freq):
+        VEL_dg[0,fi,:] = tapered_sinusoid_dt(time, 0e3, f0, c=c)
+        DIS_dg[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
+    ### Normalize velocity and displacement so that max(VEL)=1
+    # tvmax = np.max(np.abs(VEL), axis=2)
+    # VEL=VEL/tvmax[:,:,None] 
+    # DIS=DIS/tvmax[:,:,None] 
+
+    north_shifts = freq 
+    east_shifts = np.array([0. for i in range(north_shifts.size)])
+    Ntr = 1*north_shifts.size 
+
+    SEISMO_ng ={"dt": dt,
+             "t_new": time,
+             "Nt": Nt,
+             "VEL": VEL_ng, 
+             "DIS": DIS_ng,
+             "Nn" : north_shifts.size,  
+             "Ne" : 1 ,
+             "EE": east_shifts, 
+             "NN" : north_shifts,
+             "iEE" : [0 for i in freq],
+             "iNN" : range(north_shifts.size),
+             "gridded": False, 
+    }
+
+    SEISMO_dg ={"dt": dt,
+             "t_new": time,
+             "Nt": Nt,
+             "VEL": VEL_dg, 
+             "DIS": DIS_dg,
+             "Nn" : north_shifts.size,  
+             "Ne" : 1 ,
+             "EE": east_shifts, 
+             "NN" : north_shifts,
+             "iEE" : [0 for i in freq],
+             "iNN" : range(north_shifts.size),
+             "gridded": False, 
+    }
+
+    # fig, ax = plt.subplots()
+    # for fi in range(freq.size):
+    #     ax.plot(time, VEL_ng[0,fi,:])
+    #     ax.plot(time, DIS_dg[0,fi,:], ls="--")
+    # plt.show()
+
+    ################################################################################################################
+    ### FRAMEWORK CALCUATION (using above classes): 
+    ################################################################################################################    
+    dt_airglow = dt
+    AIRGLOW_ng = AirglowSignal(SEISMO_ng, Nz = 500, do_plot=False, disable_att=True)
+    AIRGLOW_dg = AirglowSignal(SEISMO_dg, Nz = 500, do_plot=False, disable_att=True)
+    ### Wavelength of ver: 
+    lambda_min = np.min(AIRGLOW_ng.f_c(AIRGLOW_ng.z_1_27_calc_m))/max(freq)
+    dz_min = AIRGLOW_ng.dz_1_27_m
+    print("Min wavelength of VER = {:.1f} m".format(lambda_min))
+    print("Min vertical resolution = {:.1f} m".format(dz_min))
+    if lambda_min<=2*dz_min:
+        print("WARNING: vertical resolution of integration might be insufficient for desired frequency")
+
+    ### We want the sines to have an amplitude of 1 m/s at 0 km 
+    # AIRGLOW.VEL = AIRGLOW.VEL #* ampl_at_start/AIRGLOW.f_amplification(hstart)
+    # AIRGLOW.DIS = AIRGLOW.DIS #* ampl_at_start/AIRGLOW.f_amplification(hstart)
+    # print(np.max(AIRGLOW.VEL, axis=2))
+    # print(np.max(AIRGLOW.DIS, axis=2))
 
     ### Now we compute the AIRGLOW at all locations and timesteps. 
     ### NOTE : This can be quite heavy ! 
     ### List of all north and east indices:
-    dir_save="./results_detectability/"
+    dir_save="./results_detectability_sine/"
     if not os.path.exists(dir_save):
         os.makedirs(dir_save)
-    list_inorth, list_ieast = AIRGLOW.iNN, AIRGLOW.iEE
-    AIRGLOW.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[],
+    list_inorth, list_ieast = AIRGLOW_ng.iNN, AIRGLOW_ng.iEE
+    ### Calculation of the Nightglow
+    AIRGLOW_ng.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[],
                                    do_parallel=True, 
                                    fourier_filtering=False,   ### Use time filtering 
                                    dir_save = dir_save,
-                                   time_save = AIRGLOW.t_new) ### Save all timesteps 
+                                   save_ver= False,              ### Faster calculation
+                                   time_save = AIRGLOW_ng.t_new) ### Save all timesteps 
     ### Calculation of the Dayglow
-    AIRGLOW.calculate_4_28_airglow(list_ieast, list_inorth, loc_save_idx=[],
+    AIRGLOW_dg.calculate_4_28_airglow(list_ieast, list_inorth, loc_save_idx=[],
                                    do_parallel=True, 
                                    dir_save=dir_save, 
-                                   time_save = AIRGLOW.t_new) ### Save all timesteps 
+                                   save_ver= False,              ### Faster calculation 
+                                   time_save = AIRGLOW_dg.t_new) ### Save all timesteps 
 
     I_nightglow = np.load(dir_save + "nightglow_I_t.npy")
     I_dayglow = np.load(dir_save + "dayglow_I_t.npy")
+
+        ### ==========================================================================================================
+    ### OTHER OPTION: Filter velocity before calculating Airglow 
+    ### Then calculate the max intensity 
+    fmean = [10**-3, 10**-2, 10**-1, 10**0]
+    freq_bins = [None, 10**-2.5, 10**-1.5, 10**-0.5, None]  ### Centered around 1e-2, 1e-1, 1. 
+    f_targets = []
+    for _, (binleft, binright) in enumerate(zip(freq_bins[:-1], freq_bins[1:])):
+        f_targets += [[binleft, binright]]
+    print(" Filter bins: ", f_targets)
+    store_Imax_ng = []
+    store_Imax_dg = []
+    for f1, f2 in tqdm(f_targets, disable=True):
+        ### DAYGLOW
+        VEL_filt = butter_filter(AIRGLOW_dg.VEL, 1/dt_airglow, f1,f2, order=5, axis=2)
+        DIS_filt = butter_filter(AIRGLOW_dg.DIS, 1/dt_airglow, f1,f2, order=5, axis=2)
+        ### Normalize all the velocity traces to 1: 
+        mvel = np.max(np.abs(VEL_filt), axis=2)
+        SEISMO_dg["VEL"] = VEL_filt/mvel[:,:,None] 
+        SEISMO_dg["DIS"] = DIS_filt/mvel[:,:,None]
+        Vfilt_dg = VEL_filt.reshape(Ntr, AIRGLOW_dg.Nt)
+        Vfilt_dg = Vfilt_dg / mvel.reshape(Ntr)[:,None]
+
+        ### NIGHTGLOW
+        VEL_filt = butter_filter(AIRGLOW_ng.VEL, 1/dt_airglow, f1,f2, order=5, axis=2)
+        DIS_filt = butter_filter(AIRGLOW_ng.DIS, 1/dt_airglow, f1,f2, order=5, axis=2)
+        ### Normalize all the velocity traces to 1: 
+        mvel = np.max(np.abs(VEL_filt), axis=2)
+        SEISMO_ng["VEL"] = VEL_filt/mvel[:,:,None] 
+        SEISMO_ng["DIS"] = DIS_filt/mvel[:,:,None]
+        Vfilt_ng = VEL_filt.reshape(Ntr, AIRGLOW_ng.Nt)
+        Vfilt_ng = Vfilt_ng / mvel.reshape(Ntr)[:,None]
+
+        AIRGLOW_filt_dg = AirglowSignal(SEISMO_dg, Nz=500)
+        AIRGLOW_filt_ng = AirglowSignal(SEISMO_ng, Nz=500)
+        dir_save_filt="./results_detectabilityf/"
+        if not os.path.exists(dir_save_filt):
+            os.makedirs(dir_save_filt)
+        list_inorth, list_ieast = AIRGLOW_filt_dg.iNN, AIRGLOW_filt_dg.iEE
+        ### Calculation of the Nightglow
+        AIRGLOW_filt_ng.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[],
+                                       do_parallel=True, 
+                                       fourier_filtering=False,   ### Use time filtering 
+                                       dir_save = dir_save_filt,
+                                       save_ver = False,          ### Faster if we save only I(lat, lon, t)
+                                       time_save = AIRGLOW_filt_ng.t_new) ### Save all timesteps 
+        ### Calculation of the Dayglow
+        AIRGLOW_filt_dg.calculate_4_28_airglow(list_ieast, list_inorth, loc_save_idx=[],
+                                       do_parallel=True, 
+                                       dir_save=dir_save_filt, 
+                                       save_ver = False,          ### Faster if we save only I(lat, lon, t)
+                                       time_save = AIRGLOW_filt_dg.t_new) ### Save all timesteps 
+        ### Now we recover the max intensity 
+        I_nightglow_filt = np.load(dir_save_filt + "nightglow_I_t.npy").reshape(Ntr,AIRGLOW_filt_ng.Nt)
+        I_dayglow_filt = np.load(dir_save_filt + "dayglow_I_t.npy").reshape(Ntr,AIRGLOW_filt_dg.Nt)
+
+        sensmax_nightglow_filt = np.max(abs(I_nightglow_filt), axis=1)/AIRGLOW_filt_ng.I_background_nightglow/\
+                                 np.max(abs(Vfilt_ng), axis=1) * 100
+        sensmax_dayglow_filt = np.max(abs(I_dayglow_filt), axis=1)/AIRGLOW_filt_dg.I_background_dayglow/\
+                                 np.max(abs(Vfilt_dg), axis=1) * 100
+
+        store_Imax_ng.append(sensmax_nightglow_filt)
+        store_Imax_dg.append(sensmax_dayglow_filt)
+    store_Imax_ng = np.array(store_Imax_ng)
+    store_Imax_dg = np.array(store_Imax_dg)
+
+    ### ==========================================================================================================
+    ### FIGURE 1: Look at the ratio of airglow spectra to velocity spectra 
+    fr = np.fft.rfftfreq(n=AIRGLOW_ng.t_new.size, d=dt_airglow)[1:]
+    sp_ng = abs(np.fft.rfft(AIRGLOW_ng.VEL, axis=2))[:,:,1:].reshape(Ntr, fr.size)         ### Ground Velocity spectrum (nightglow)
+    sp_dg = abs(np.fft.rfft(AIRGLOW_dg.VEL, axis=2))[:,:,1:].reshape(Ntr, fr.size)         ### Ground Velocity spectrum (dayglow)
+    spin = abs(np.fft.rfft(I_nightglow, axis=2))[:,:,1:].reshape(Ntr, fr.size)       ### Nightglow spectrum
+    spid = abs(np.fft.rfft(I_dayglow, axis=2))[:,:,1:].reshape(Ntr, fr.size)         ### Dayglow spectrum 
+
+    fig, ((ax1, ax2, ax3),(ax4,ax5,ax6)) = plt.subplots(2,3, figsize=(13,8)) 
+    sens_ng = spin/AIRGLOW_ng.I_background_nightglow/sp_ng*100
+    sens_dg = spid/AIRGLOW_dg.I_background_dayglow/sp_dg*100
+    ###
+    ax1b = ax1.twinx()
+    for es in range(Ntr):
+        ax1.plot(fr, spin[es,:], c="forestgreen", lw=0.5, alpha=0.01)
+        ax1.plot(fr, spid[es,:], c="orangered", lw=0.5, alpha=0.01)
+        ax1b.plot(fr, sp_ng[es,:], c="grey", lw=0.5, alpha=0.01)
+        ax1b.plot(fr, sp_dg[es,:], c="k", lw=0.5, alpha=0.01)
+    ax1.plot([],[], c="grey", lw=0.5, alpha=0.01, label="Velocity for Nightglow")
+    ax1.plot([],[], c="k", lw=0.5, alpha=0.01, label="Velocity for Dayglow")
+    ax1.plot(fr, np.median(spin, axis=0), c="forestgreen", lw=1.5,label="Nightglow")
+    ax1.plot(fr, np.median(spid, axis=0), c="orangered", lw=1.5,label="Dayglow")
+    ax1b.plot(fr, np.median(sp_ng, axis=0), c="grey", lw=1.5,label="Ground Velocity")
+    ax1b.plot(fr, np.median(sp_dg, axis=0), c="k", lw=1.5,label="Ground Velocity")
+    ax1.set_xscale("log")
+    ax1.set_yscale("log")
+    ax1b.set_xscale("log")
+    ax1b.set_yscale("log")
+    ax1.grid(ls =":")
+    ax1.set_xlabel(r"Frequency / [$Hz$]")
+    ax1.set_ylabel(r"Intensity / [$R$]")
+    ax1b.set_ylabel(r"Velocity / [$m\cdot s^{-1}$]")
+    ax1.legend(framealpha=1, edgecolor="none", loc=3) 
+    ax1.set_xlim(8e-4, 1.2)
+    ###
+    ax2.fill_between(fr, np.min(sens_dg, axis=0), np.max(sens_dg, axis=0), color="orangered", alpha=0.3)
+    ax2.fill_between(fr, np.min(sens_ng, axis=0), np.max(sens_ng, axis=0), color="forestgreen", alpha=0.3)
+    ax2.plot(fr, np.median(sens_ng, axis=0), color="forestgreen", lw=1.5, label="Nightglow")
+    ax2.plot(fr, np.median(sens_dg, axis=0), color="orangered", lw=1.5, label="Dayglow")
+    for es in range(Ntr):
+        ax2.plot(fr, sens_ng[es,:], c="k", lw=0.1, alpha=0.01)
+        ax2.plot(fr, sens_dg[es,:], c="k", lw=0.1, alpha=0.01)
+    ax2.plot(freq, np.max(abs(I_nightglow[0,:,:]), axis=1)/AIRGLOW_filt_ng.I_background_nightglow*100, color="forestgreen", lw=1.5, marker="s", label="Sutin")
+    ax2.plot(freq, np.max(abs(I_dayglow[0,:,:]), axis=1)/AIRGLOW_filt_ng.I_background_dayglow*100, color="orangered", lw=1.5, marker="s")
+    ax2.set_xscale("log")
+    ax2.set_yscale("log")
+    ax2.set_xlabel(r"Frequency / [$Hz$]")
+    ax2.set_ylabel(r"Sensitivity / [$\%/(m\cdot s^{-1})$]")
+    ax2.grid(ls =":")
+    ax2.legend(framealpha=1, edgecolor="none", loc=3) 
+    ax2.set_xlim(8e-4, 1.2)
+    ax2.set_ylim(1e-3, 1e7)
+    ###
+    f_targetse = np.array(f_targets).T
+    f_targetse[0,0] = 1e-4
+    f_targetse[1,-1] = 1e4
+    f_targetse[0,:] = fmean - f_targetse[0,:] 
+    f_targetse[1,:] = f_targetse[1,:] - fmean
+    # ax3.fill_between(fmean, np.min(store_Imax_dg, axis=1), np.max(store_Imax_dg, axis=1), color="orangered", alpha=0.3)
+    # ax3.fill_between(fmean, np.min(store_Imax_ng, axis=1), np.max(store_Imax_ng, axis=1), color="forestgreen", alpha=0.3)
+    ls = ["-", "--", "-.", ":"]
+    for fi, f in enumerate(freq):
+        ax3.plot(fmean, store_Imax_ng[:,fi], color="forestgreen", lw=1.5, label="{:.3g} Hz".format(f), marker="s", ls=ls[fi])
+        ax3.plot(fmean, store_Imax_dg[:,fi], color="orangered", lw=1.5, marker="s", ls=ls[fi])
+    ax3.set_xscale("log")
+    ax3.set_yscale("log")
+    ax3.set_xlabel(r"Frequency of input signal / [$Hz$]")
+    ax3.set_ylabel(r"Max excitation / [$\%/(m\cdot s^{-1})$]")
+    ax3.grid(ls =":")
+    ax3.legend(framealpha=1, edgecolor="none", loc=3)    
+    ax3.set_xlim(8e-4, 1.2)
+    ax3.set_ylim(1e-3, 1e7)
+    ###
+    ### Choose 8 random velocity traces 
+    for ic, f in enumerate(freq):
+        ax5.plot(AIRGLOW_ng.t_new, AIRGLOW_ng.VEL[0,ic,:]/abs(AIRGLOW_ng.VEL[0,ic,:]).max() + 2*ic, lw=1, c="k")
+        ax5.plot(AIRGLOW_dg.t_new, AIRGLOW_dg.VEL[0,ic,:]/abs(AIRGLOW_dg.VEL[0,ic,:]).max() + 2*ic, lw=1, c="k", ls="--")
+    ax5.set_xlim(AIRGLOW_ng.t_new.min(), AIRGLOW_ng.t_new.max())
+    ax5.set_xlabel(r"Time / [$s$]")
+    ax5.set_ylabel(r"Input velocity traces (Example)")
+    ax5.set_yticks([])
+    ###
+    ### Show 4 sinusoid 
+    for fi, (f1, f2) in enumerate(f_targets):
+        ### To scale with the velocity amplitude in each freq, band 
+        for ic, f in enumerate(freq):
+            Vf = butter_filter(AIRGLOW_ng.VEL[0,ic,:], 1/dt_airglow, f1,f2, order=5)
+            ax6.plot(AIRGLOW_ng.t_new, Vf/abs(Vf).max() + 2*fi, lw=1, c="k")
+            Vf = butter_filter(AIRGLOW_dg.VEL[0,ic,:], 1/dt_airglow, f1,f2, order=5)
+            ax6.plot(AIRGLOW_dg.t_new, Vf/abs(Vf).max() + 2*fi, lw=1, c="k", ls="--")
+    ax6.set_xlim(AIRGLOW_ng.t_new.min(), AIRGLOW_ng.t_new.max())
+    ax6.set_xlabel(r"Time / [$s$]")
+    ax6.set_ylabel(r"Filtered Input velocity traces (Example)")
+    ax6.set_yticks([2*fi for fi in range(len(f_targets))])
+    ax6.set_yticklabels(["-- {:.1g} Hz".format(10**-2.5), "{:.1g}--{:.1g} Hz".format(10**-2.5, 10**-1.5), 
+                         "{:.1g}--{:.1g} Hz".format(10**-1.5,10**-0.5), "{:.1g} Hz--".format(10**-0.5)])
+                         # freq_bins = [None, 10**-2.5, 10**-1.5, 10**-0.5, None] 
+
+    ###
+    ax4.set_axis_off()
+    ###
+    fig.tight_layout()
+    fig.savefig(dir_save + "Sensitivity_based_on_spectra_sine_"+ tit + ".png", dpi=300)
+    fig.savefig(dir_save + "Sensitivity_based_on_spectra_sine_"+ tit + ".pdf")
+    ### ==========================================================================================================
     
 
     ### Now, we make some frequency bins 
     # freq_bins = np.logspace(np.log10(1e-3), np.log10(5e-1), 5)
     fmean = [10**-3, 10**-2, 10**-1, 10**0]
     freq_bins = [None, 10**-2.5, 10**-1.5, 10**-0.5, None]  ### Centered around 1e-2, 1e-1, 1. 
+    fr = np.fft.rfftfreq(n=time.size, d=dt_airglow)[1:]
     f_targets = []
     for ibin, (binleft, binright) in enumerate(zip(freq_bins[:-1], freq_bins[1:])):
         f_targets += [[binleft, binright]]
@@ -2913,20 +3599,51 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
 
     scaling_airglow = pd.DataFrame()
     ### We loop over locations and store the max amplitude in a dataframe: 
-    for f1, f2 in tqdm(f_targets, disable=True):
+    for fi, (f1, f2) in tqdm(enumerate(f_targets), disable=True):
 
-        waveform_nightglow_filt = butter_filter(I_nightglow, 1/dt_airglow, f1,f2, order=4, axis=2)
-        perturb_nightglow_filt = waveform_nightglow_filt/AIRGLOW.I_background_nightglow*100
+        ### To scale with the velocity amplitude in each freq, band 
+        waveform_vel_ng_filt = butter_filter(AIRGLOW_ng.VEL, 1/dt_airglow, f1,f2, order=4, axis=2)
+        waveform_vel_dg_filt = butter_filter(AIRGLOW_dg.VEL, 1/dt_airglow, f1,f2, order=4, axis=2)
+        
+        # waveform_nightglow_filt =np.repeat(butter_filter(I_nightglow[:,fi:fi+1,:], 1/dt_airglow, f1,f2, order=5, axis=2), freq.size, axis=1)
+        waveform_nightglow_filt =np.repeat(I_nightglow[:,fi:fi+1,:], freq.size, axis=1)
+        perturb_nightglow_filt = waveform_nightglow_filt/AIRGLOW_ng.I_background_nightglow/\
+                                np.max(abs(waveform_vel_ng_filt), axis=2)[:,:,None] * 100
 
-        waveform_dayglow_filt = butter_filter(I_dayglow, 1/dt_airglow, f1,f2, order=4, axis=2)
-        perturb_dayglow_filt = waveform_dayglow_filt/AIRGLOW.I_background_dayglow*100
+        # waveform_dayglow_filt = np.repeat(butter_filter(I_dayglow[:,fi:fi+1,:], 1/dt_airglow, f1,f2, order=5, axis=2), freq.size, axis=1)
+        waveform_dayglow_filt = np.repeat(I_dayglow[:,fi:fi+1,:], freq.size, axis=1)
+        perturb_dayglow_filt = waveform_dayglow_filt/AIRGLOW_dg.I_background_dayglow/\
+                                np.max(abs(waveform_vel_dg_filt), axis=2)[:,:,None] * 100
+
+        print(f1, f2, freq[fi])
         
         # fig, ax = plt.subplots() 
-        # ax.plot(I_t[5,5,:])
-        # ax.plot(waveform_nightglow[5,5,:])
+        # fr = np.fft.rfftfreq(n=time.size, d=dt_airglow)
+        # ax.plot(fr, abs(np.fft.rfft(perturb_nightglow_filt[0,fi,:]))*np.sqrt(dt/AIRGLOW_ng.Nt), c="k", label="Sensitivity [%]")
+        # axb = ax.twinx()
+        # axb.plot(fr, abs(np.fft.rfft(VEL_ng[0,fi,:]))*np.sqrt(dt/AIRGLOW_ng.Nt), c="r", label="Vel at 0 km")
+        # axb.plot(fr, abs(np.fft.rfft(I_nightglow[0,fi,:]/abs(I_nightglow[0,fi,:]).max()))*np.sqrt(dt/AIRGLOW_ng.Nt), 
+        #          c="grey", lw=1, label="Intensity")
+        
+        # ax.legend(loc=0)
+        # axb.legend(loc=4)
+        # ax.set_xscale("log")
+        # # ax.set_yscale("log")
+        # ax.axvline(freq[fi])
+        # ax.axvline(fmean_ng[fi], ls="--")
+        # if f1 == None: 
+        #     f1b = 0 
+        # else: 
+        #     f1b = f1
+        # if f2 == None: 
+        #     f2b = 1e8
+        # else: 
+        #     f2b = f2
+        # ax.axvspan(f1b,f2b,color="grey", alpha=0.4)
+        # ax.set_title("F = {:.3g} Hz".format(freq[fi]))
 
-        for (ies, ins) in zip(AIRGLOW.iEE.ravel(), AIRGLOW.iNN.ravel()):
-            es, ns = AIRGLOW.EE[ies, ins], AIRGLOW.NN[ies,ins]
+        for (ies, ins) in zip(AIRGLOW_ng.iEE, AIRGLOW_ng.iNN):
+            es, ns = AIRGLOW_ng.EE[ies], AIRGLOW_ng.NN[ins]
             loc_dict = dict(ns=ns, es=es, 
                             f1=f1 if f1 is not None else 0, 
                             f2=f2 if f2 is not None else 1., 
@@ -2951,6 +3668,20 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
     if do_plot:
         fig, ax = plt.subplots()
 
+        ### Instead of using filtering, we find the dominant freq of the initial signal 
+        # fmean_dg = fmean 
+        # fmean_ng = fmean 
+        # fmean_dg = [] 
+        # fmean_ng = [] 
+        # fr = np.fft.rfftfreq(n=time.size, d=dt_airglow)[1:]
+        # for fi in range(freq.size):
+        #     sp = abs(np.fft.rfft(AIRGLOW_dg.VEL[0,fi,:]))
+        #     fmean_dg.append(fr[np.argmax(sp[1:])])
+
+        #     sp = abs(np.fft.rfft(AIRGLOW_ng.VEL[0,fi,:]))
+        #     fmean_ng.append(fr[np.argmax(sp[1:])])
+
+
         ax.plot(fmean, scaling_nightglow_plot.nightglow, 
                 color='forestgreen', marker="s", label=r"1.27$\mu m$ Nightglow")
         ax.fill_between(fmean, 
@@ -2962,84 +3693,267 @@ def compute_airglow_scaler_new(mw=None, strike=45, dip=45, rake=45, do_plot=True
                         scaling_dayglow_plot.dayglow_q25, scaling_dayglow_plot.dayglow_q75,
                         color='orangered', alpha=0.3)
         
-        if effect == "ampl":
-            ng_min = np.load(dir_save + "test_ampli_min_nightglow.npy")
-            dg_min = np.load(dir_save + "test_ampli_min_dayglow.npy")
-            ng75_min = np.load(dir_save + "test_ampli_min_nightglow_q75.npy")
-            dg75_min = np.load(dir_save + "test_ampli_min_dayglow_q75.npy")
-            ng25_min = np.load(dir_save + "test_ampli_min_nightglow_q25.npy")
-            dg25_min = np.load(dir_save + "test_ampli_min_dayglow_q25.npy")
-            ###
-            ng_max = np.load(dir_save + "test_ampli_max_nightglow.npy")
-            dg_max = np.load(dir_save + "test_ampli_max_dayglow.npy")
-            ng75_max = np.load(dir_save + "test_ampli_max_nightglow_q75.npy")
-            dg75_max = np.load(dir_save + "test_ampli_max_dayglow_q75.npy")
-            ng25_max = np.load(dir_save + "test_ampli_max_nightglow_q25.npy")
-            dg25_max = np.load(dir_save + "test_ampli_max_dayglow_q25.npy")
-
-            ax.plot(fmean, ng_min, color='grey', marker="v", ls="--", label=r"Minimum Amplification")
-            ax.fill_between(fmean, ng25_min, ng75_min,color='grey', alpha=0.2)
-            ax.plot(fmean, dg_min, color='grey', marker="v", ls ="--")
-            ax.fill_between(fmean, dg25_min, dg75_min,color='grey', alpha=0.2)
-            ###
-            ax.plot(fmean, ng_max, color='grey', marker="^", ls=":", label=r"Maximum Amplification")
-            ax.fill_between(fmean, ng25_max, ng75_max,color='grey', alpha=0.2)
-            ax.plot(fmean, dg_max, color='grey', marker="^", ls =":")
-            ax.fill_between(fmean, dg25_max, dg75_max,color='grey', alpha=0.2)
-
-
         ax.legend(frameon=False)
         ax.set_yscale('log')
         ax.set_xscale('log')
         ax.set_xlabel("Frequency / [$Hz$]")
         ax.set_ylabel(r"Airglow Intensity perturbation [$\%/(1\,m/s)$]")
         ax.set_title("Intensity perturbation for 1 $m/s$ peak velocity at the ground surface")
-        if effect == "ampl":
-            fig.savefig(dir_save + "Airglow_scaler_amplification.png", dpi=300)
-        else:
-            fig.savefig(dir_save + "Airglow_scaler"+ tit + ".png", dpi=300)
+        # fig.savefig(dir_save + "Airglow_scaler"+ tit + ".png", dpi=300)
+
+
+
+def compute_airglow_scaler_Hots(mw=None, strike=45, dip=45, rake=45, do_plot=True, effect=None, tit ="", 
+                               store_ids_dists = [('GF_venus_Hot10_atten_qssp_nearfield',0e3,50e3),('GF_venus_Hot10_atten_qssp',50e3,8000e3)]):
+    '''
+    We calculate airglow signals for a series of receiver locations and source depths. 
+    '''
+
+    ### First, define the grid of locations. 
+    gridded       = True
+    min_grid_dist = 0e3
+    max_grid_dist = 5000e3 # 4000e3
+    delta_dist    = 50e3 
+    Np = 1+ int(2*max_grid_dist/delta_dist)
+    north_shifts  = np.linspace(-max_grid_dist, max_grid_dist, Np, endpoint=True)[::10]
+    east_shifts   = np.linspace(-max_grid_dist, max_grid_dist, Np, endpoint=True)[::10]
+    Ntr = east_shifts.size*north_shifts.size 
     
-    if effect =="ampl":
-        print("here", tit)
-        np.save(dir_save + "test_"+ tit + "_nightglow", scaling_nightglow_plot.nightglow)
-        np.save(dir_save + "test_"+ tit + "_dayglow", scaling_dayglow_plot.dayglow)
-        np.save(dir_save + "test_"+ tit + "_nightglow_q75", scaling_nightglow_plot.nightglow_q75)
-        np.save(dir_save + "test_"+ tit + "_dayglow_q75", scaling_dayglow_plot.dayglow_q75)
-        np.save(dir_save + "test_"+ tit + "_nightglow_q25", scaling_nightglow_plot.nightglow_q25)
-        np.save(dir_save + "test_"+ tit + "_dayglow_q25", scaling_dayglow_plot.dayglow_q25)
+    ### Source depths 
+    delta_depth = 5e3
+    depths = np.arange(5e3, 50e3+delta_depth, delta_depth)
+
+    ### Option for Pyrocko 
+    opt_synthetics = dict(
+        ### Options for source 
+        mw = mw,               ### if none: We only get the Green's function
+        depth = depths[5],     ### Only one depth
+        strike = strike,       ### Default mechanism 
+        dip =  dip, 
+        rake = rake,
+        stf_type = None,       ### Dirac source 
+        #stf_type = 'triangle', 
+        # stf_type = 'sinus', 
+        #effective_duration = 25.,
+        ###  
+        ### Options for store
+        base_folder='/projects/restricted/infrasound/data/infrasound/2023_Venus_inversion/',
+        ### Old option, single store 
+        #store_id = 'GF_venus_Cold100_qssp',
+        #store_id = 'GF_venus_Cold100_qssp_grid',
+        ### Give store names, and min and max valid distance 
+        store_ids_dists = store_ids_dists,
+        ###
+        ### Options for grid 
+        north_shifts = north_shifts, 
+        east_shifts = east_shifts,
+        gridded=gridded
+    )
+
+    dir_save="./results_detectability/"
+    if not os.path.exists(dir_save):
+        os.makedirs(dir_save)
+    
+
+    def airglow_scaler_calculation(opt_synthetics):
+        ### INITIALIZE SEISMOGRAM CLASS 
+        ### we build seismograms over grid
+        ### 
+        SEISMO = Seismograms(**opt_synthetics)
+        print("Total grid size: ", SEISMO.NN.size)
+
+        ### OPTIONAL: Plot to check 
+        ns, es       = 1000e3, 0e3
+        ### Plot one of the waveforms for check
+        # fig1 = SEISMO.plot_traces(ns, es, do_interpolate=True)
+
+        ### Store results inside a regular grid. 
+        dt_airglow = 0.5
+        SEISMO.arrange_interpolate_synthetics(tmax=3000, dt=dt_airglow)
+
+        ### Normalize all the velocity traces to 1: 
+        mvel = np.max(np.abs(SEISMO.VEL), axis=2)
+        SEISMO.VEL/=mvel[:,:,None] 
+        SEISMO.DIS/=mvel[:,:,None]
+
+        ### OPTIONAL: Plot velocity wavefront at the surface for sanity check 
+        # fig2 = SEISMO.plot_wavefront()
+
+        ### Now, we will calculate the AIRGLOW at every loc of the grid
+        ### We first load the airglow class
+        AIRGLOW = AirglowSignal(SEISMO, Nz=500)
+
+        ### Now we compute the AIRGLOW at all locations and timesteps. 
+        ### NOTE : This can be quite heavy ! 
+        ### List of all north and east indices:
+        list_inorth, list_ieast = AIRGLOW.iNN, AIRGLOW.iEE
+
+        ### Calculation of the Nightglow
+        AIRGLOW.calculate_1_27_airglow(list_ieast, list_inorth, loc_save_idx=[],
+                                    do_parallel=True, 
+                                    fourier_filtering=False,   ### Use time filtering 
+                                    dir_save = dir_save,
+                                    save_ver = False,          ### Faster if we save only I(lat, lon, t)
+                                    time_save = AIRGLOW.t_new) ### Save all timesteps 
+        ### Calculation of the Dayglow
+        AIRGLOW.calculate_4_28_airglow(list_ieast, list_inorth, loc_save_idx=[],
+                                    do_parallel=True, 
+                                    dir_save=dir_save, 
+                                    save_ver = False,          ### Faster if we save only I(lat, lon, t)
+                                    time_save = AIRGLOW.t_new) ### Save all timesteps 
+
+        I_nightglow = np.load(dir_save + "nightglow_I_t.npy")
+        I_dayglow = np.load(dir_save + "dayglow_I_t.npy")
+        
+        ### ==========================================================================================================
+        ### FIGURE: We make some frequency bins 
+        # freq_bins = np.logspace(np.log10(1e-3), np.log10(5e-1), 5)
+        fmean = [10**-3, 10**-2, 10**-1, 10**0]
+        freq_bins = [None, 10**-2.5, 10**-1.5, 10**-0.5, None]  ### Centered around 1e-2, 1e-1, 1. 
+        f_targets = []
+        for _, (binleft, binright) in enumerate(zip(freq_bins[:-1], freq_bins[1:])):
+            f_targets += [[binleft, binright]]
+        print(" Filter bins: ", f_targets)
+
+        scaling_airglow = pd.DataFrame()
+        ### We loop over locations and store the max amplitude in a dataframe: 
+        for f1, f2 in tqdm(f_targets, disable=True):
+
+            ### To scale with the velocity amplitude in each freq, band 
+            waveform_vel_filt = butter_filter(AIRGLOW.VEL, 1/dt_airglow, f1,f2, order=5, axis=2)
+            
+            waveform_nightglow_filt = butter_filter(I_nightglow, 1/dt_airglow, f1,f2, order=5, axis=2)
+            perturb_nightglow_filt = waveform_nightglow_filt/AIRGLOW.I_background_nightglow/\
+                                    np.max(abs(waveform_vel_filt), axis=2)[:,:,None] * 100
+
+            waveform_dayglow_filt = butter_filter(I_dayglow, 1/dt_airglow, f1,f2, order=5, axis=2)
+            perturb_dayglow_filt = waveform_dayglow_filt/AIRGLOW.I_background_dayglow/\
+                                    np.max(abs(waveform_vel_filt), axis=2)[:,:,None] * 100
+
+            for (ies, ins) in zip(AIRGLOW.iEE.ravel(), AIRGLOW.iNN.ravel()):
+                es, ns = AIRGLOW.EE[ies, ins], AIRGLOW.NN[ies,ins]
+                loc_dict = dict(ns=ns, es=es, 
+                                f1=f1 if f1 is not None else 0, 
+                                f2=f2 if f2 is not None else 1., 
+                                nightglow=abs(perturb_nightglow_filt[ies, ins,:]).max(),
+                                dayglow=abs(perturb_dayglow_filt[ies, ins,:]).max())
+                # dayglow=abs(waveform_dayglow).max()
+                scaling_airglow = pd.concat([scaling_airglow, pd.DataFrame([loc_dict])])
+
+        ### Calculate statistics 
+        scaling_nightglow_plot = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].median().reset_index()
+        scaling_nightglow_plot['nightglow_q25'] = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].quantile(q=0.25).reset_index()['nightglow']
+        scaling_nightglow_plot['nightglow_q75'] = scaling_airglow.groupby(['f1', 'f2',])['nightglow'].quantile(q=0.75).reset_index()['nightglow']
+        ###
+        scaling_dayglow_plot = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].median().reset_index()
+        scaling_dayglow_plot['dayglow_q25'] = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].quantile(q=0.25).reset_index()['dayglow']
+        scaling_dayglow_plot['dayglow_q75'] = scaling_airglow.groupby(['f1', 'f2',])['dayglow'].quantile(q=0.75).reset_index()['dayglow']
+
+        scaling_nightglow_plot.to_csv(dir_save + "nightglow_scaler"+tit + ".csv", header=True, index=False)
+        scaling_dayglow_plot.to_csv(dir_save + "dayglow_scaler"+tit + ".csv", header=True, index=False)
+
+        return(fmean, scaling_nightglow_plot, scaling_dayglow_plot)
+    
+    
+    def plot_scaler_hot(fmean, ng_hot25, dg_hot25, ng_hot10, dg_hot10, ng_hot40, dg_hot40, ng_cold100, dg_cold100):
+        fig, ax = plt.subplots()
+
+        ax.plot(fmean, ng_hot25.nightglow, color='forestgreen', marker="s", label=r"'Hot25', 1.27$\mu m$ Nightglow")
+        ax.fill_between(fmean, ng_hot25.nightglow_q25, ng_hot25.nightglow_q75,color='forestgreen', alpha=0.3)
+        ax.plot(fmean, dg_hot25.dayglow, color='orangered', marker="s", label=r"'Hot25', 4.28$\mu m$ Dayglow")
+        ax.fill_between(fmean, dg_hot25.dayglow_q25, dg_hot25.dayglow_q75, color='orangered', alpha=0.3)
+        ###
+        ax.plot(fmean, ng_hot10.nightglow, color='forestgreen', marker="v", ls="--", label=r"'Hot10'")
+        # ax.fill_between(fmean, ng_hot10.nightglow_q25, ng_hot10.nightglow_q75,color='forestgreen', alpha=0.2)
+        ax.plot(fmean, dg_hot10.dayglow, color='orangered', marker="v", ls ="--")
+        # ax.fill_between(fmean, dg_hot10.dayglow_q25, dg_hot10.dayglow_q75,color='orangered', alpha=0.2)
+        ###
+        ax.plot(fmean, ng_hot40.nightglow, color='forestgreen', marker="^", ls=":", label=r"'Hot40'")
+        # ax.fill_between(fmean, ng_hot40.nightglow_q25, ng_hot40.nightglow_q75,color='forestgreen', alpha=0.2)
+        ax.plot(fmean, dg_hot40.dayglow, color='orangered', marker="^", ls =":")
+        # ax.fill_between(fmean, dg_hot40.dayglow_q25, dg_hot40.dayglow_q75,color='orangered', alpha=0.2)
+        ###
+        ax.plot(fmean, ng_cold100.nightglow, color='k', marker="s", label=r"'Cold100'")
+        # ax.fill_between(fmean, ng_cold100.nightglow_q25, ng_hot25.nightglow_q75,color='k', alpha=0.3)
+        ax.plot(fmean, dg_cold100.dayglow, color='k', marker="s")
+        # ax.fill_between(fmean, dg_cold100.dayglow_q25, dg_hot25.dayglow_q75, color='k', alpha=0.3)
+        
+
+        ax.legend(frameon=False, title="Subsurface model")
+        ax.set_yscale('log')
+        ax.set_xscale('log')
+        ax.set_ylim(1e-3,1e6)
+        ax.set_xlabel("Frequency / [$Hz$]")
+        ax.set_ylabel(r"Airglow Intensity perturbation [$\%/(1\,m/s)$]")
+        ax.set_title("Intensity perturbation for 1 $m/s$ peak velocity at the ground surface")
+        
+        fig.savefig(dir_save + "Airglow_scaler_Hots.png", dpi=300)
+        fig.savefig(dir_save + "Airglow_scaler_Hots.pdf")
+
+
+
+    ### Do MIN 
+    opt_synthetics["store_ids_dists"] = [('GF_venus_Hot10_atten_qssp_nearfield',0e3,50e3),('GF_venus_Hot10_atten_qssp',50e3,8000e3)]
+    tit = "_Hot10"
+    fmean, scaling_nightglow_plot_hot10, scaling_dayglow_plot_hot10 = airglow_scaler_calculation(opt_synthetics)
+    ### Do MAX 
+    opt_synthetics["store_ids_dists"] = [('GF_venus_Hot40_atten_qssp_nearfield',0e3,50e3),('GF_venus_Hot40_atten_qssp',50e3,8000e3)]
+    tit = "_Hot40"
+    fmean, scaling_nightglow_plot_hot40, scaling_dayglow_plot_hot40 = airglow_scaler_calculation(opt_synthetics)
+    ### Do ORIG 
+    opt_synthetics["store_ids_dists"] = [('GF_venus_Hot25_atten_qssp_nearfield',0e3,50e3),('GF_venus_Hot25_atten_qssp',50e3,8000e3)]
+    tit = "_Hot25"
+    fmean, scaling_nightglow_plot_hot25, scaling_dayglow_plot_hot25 = airglow_scaler_calculation(opt_synthetics)
+    ### Do ORIG 
+    opt_synthetics["store_ids_dists"] = [('GF_venus_Cold100_atten_qssp_nearfield',0e3,50e3),('GF_venus_Cold100_atten_qssp',50e3,8000e3)]
+    tit = "_Cold100"
+    fmean, scaling_nightglow_plot_cold100, scaling_dayglow_plot_cold100 = airglow_scaler_calculation(opt_synthetics)
+    
+    plot_scaler_hot(fmean, scaling_nightglow_plot_hot25, scaling_dayglow_plot_hot25, 
+                        scaling_nightglow_plot_hot10, scaling_dayglow_plot_hot10, 
+                         scaling_nightglow_plot_hot40, scaling_dayglow_plot_hot40,
+                         scaling_nightglow_plot_cold100, scaling_dayglow_plot_cold100)
 
 
 
 # =========================================================================================================
 ### Some verifications 
 # =========================================================================================================
-def check_simple_perturbation_nightglow():
-    ### As in Balthasar Kenda's thesis, we send a sinusoidal perturbation with amplitude defined at 90 km 
+def check_simple_perturbation_nightglow(test="kenda"):
+    ### Testing two simple approaches: 
+    ###  - As in Kenda's thesis (2018), we send a sinusoidal 
+    ###    perturbation with amplitude defined at 90 km.
+    ###  - As in Sutin et al. (2018), we send a gaussian 
+    ###    perturbation with amplitude defined at 100 km. 
 
+    ### Time parameters 
+    dt = 1                ### s
+    tf = 1000               ### s
+    time = np.arange(-tf/2, tf, dt)
+    # time = np.arange(-tf, tf, dt)
+    Nt = time.size
+    # print(Nt)
+    # quit()
+
+    ### Input signal parameter
     freq = np.array([0.2,0.1,0.02, 0.01]) ### Hz
     # freq = np.array([0.4,0.2,0.1]) ### Hz
     # freq = np.array([0.01]) ### Hz
-    c = 200                 ### m/s
-    dt = 0.1                ### s
-    tf = 1000               ### s
-    # hstart = 90e3           ### m   ### To test Kenda 2018 
-    # ampl_at_start = 5e-3    ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda 2018) 
-    hstart = 100e3          ### m   ### To test Sutin 2018
-    ampl_at_start = 4e-2    ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin 2018) 
+    if test=="kenda":
+        c = 200                 ### Fixed vertical wave velocity m/s
+        hstart = 90e3           ### m   ### To test Kenda 2018 
+        ampl_at_start = 5e-3    ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda 2018) 
+    elif test=="sutin":
+        c = 200                 ### Fixed vertical wave velocity m/s
+        hstart = 100e3          ### m   ### To test Sutin 2018
+        ampl_at_start = 4e-2    ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin 2018) 
 
-    # time = np.arange(-tf/10, tf, dt)
-    time = np.arange(-tf, tf, dt)
-    Nt = time.size
-    VEL = np.zeros((1,freq.size, Nt))
-    DIS = np.zeros((1,freq.size, Nt))
-
-
+    ### Input functions
     def tapered_gaussian(t, z, f0, c=200):
-        fc = np.sqrt(2)*f0
-        ### Tapered sinusoid propagating at speed c 
-        sig = (1 - ((t-z/c)*fc)**2) * np.exp(-0.5*(t-z/c)**2*fc**2)
-        #sig = np.sin(2*np.pi*f0*(t - z/c))
-        Nsine = int((8/fc)/dt)
+        #fc = np.sqrt(2)*f0
+        ### Tapered Ricker propagating at speed c 
+        sig = (1 - 2*((t-z/c)*f0*np.pi)**2) * np.exp(-np.pi**2*(t-z/c)**2*f0**2)   ### Ricker
+        Nsine = int((8/f0/np.sqrt(2))/dt)
         if not Nsine%2==0: 
             Nsine+=1
         tp = tukey(Nsine, alpha=0.0)
@@ -3058,12 +3972,14 @@ def check_simple_perturbation_nightglow():
         return(sig)
     
     def tapered_gaussian_dz(t, z, f0, c=200):
-        fc = np.sqrt(2)*f0
+        tau = t - z/c
+        a = np.pi**2 * f0**2
+
+        sig = (a/c) * tau * (6 - 4*a*tau**2) * np.exp(-a*tau**2)
         ### Tapered sinusoid propagating at speed c 
-        sig = (fc**2 / c) * (t - z/c) * (3 - fc**2 * (t - z/c)**2) \
-                 * np.exp(-0.5 * (t - z/c)**2 * fc**2)
-        #sig = np.sin(2*np.pi*f0*(t - z/c))
-        Nsine = int((8/fc)/dt)
+        # sig = (fc**2 / c) * (t - z/c) * (3 - fc**2 * (t - z/c)**2) \
+        #          * np.exp(-0.5 * (t - z/c)**2 * fc**2)
+        Nsine = int((8/f0/np.sqrt(2))/dt)
         if not Nsine%2==0: 
             Nsine+=1
         tp = tukey(Nsine, alpha=0.0)
@@ -3082,12 +3998,15 @@ def check_simple_perturbation_nightglow():
         return(sig)
     
     def tapered_gaussian_dt(t, z, f0, c=200):
-        fc = np.sqrt(2)*f0
-        ### Tapered sinusoid propagating at speed c 
-        sig = -fc**2 * (t - z/c) * (3 - fc**2 * (t - z/c)**2) \
-                * np.exp(-0.5 * (t - z/c)**2 * fc**2)
-        #sig = np.sin(2*np.pi*f0*(t - z/c))
-        Nsine = int((8/fc)/dt)
+        tau = t - z/c
+        a = np.pi**2 * f0**2
+
+        sig = a * tau * (4*a*tau**2 - 6) * np.exp(-a*tau**2)
+        ### Tapered gaussian propagating at speed c 
+        # sig = -fc**2 * (t - z/c) * (3 - fc**2 * (t - z/c)**2) \
+        #         * np.exp(-0.5 * (t - z/c)**2 * fc**2)
+
+        Nsine = int((8/f0/np.sqrt(2))/dt)
         if not Nsine%2==0: 
             Nsine+=1
         tp = tukey(Nsine, alpha=0.0)
@@ -3177,31 +4096,45 @@ def check_simple_perturbation_nightglow():
     # plt.show() 
     # quit()
 
-    ### Same for gaussian signal 
-    # fig, ax = plt.subplots() 
+    ### Same for gaussian/Ricker signal 
+    fig, ax = plt.subplots() 
+    for fi, f in enumerate(freq):
+        # ax.plot(time, VEL[0,fi,:])
+        ax.plot(time, tapered_gaussian(time, hstart, f), ls="--")
+        # ax.plot(time, tapered_gaussian_dz(time, hstart, f), ls="--")
+        # ax.plot(time, np.gradient( tapered_gaussian(time[None,:], hstart+np.linspace(-1e2,1e2,11)[:,None], f), hstart+np.linspace(-1e2,1e2,11), axis=0 )[5,:] , ls=":")
+        # ax.plot(time, tapered_gaussian_dt(time, hstart, f), ls="--")
+        # ax.plot(time, np.gradient( tapered_gaussian(time, hstart, f), time) , ls=":")
+    # fig, ax = plt.subplots()
     # for fi, f in enumerate(freq):
-    #     # ax.plot(time, VEL[0,fi,:])
-    #     # ax.plot(time, tapered_gaussian(time, hstart, f), ls="--")
-    #     # ax.plot(time, tapered_gaussian_dz(time, hstart, f), ls="--")
-    #     # ax.plot(time, np.gradient( tapered_gaussian(time[None,:], hstart+np.linspace(-1e2,1e2,11)[:,None], f), hstart+np.linspace(-1e2,1e2,11), axis=0 )[5,:] , ls=":")
-    #     ax.plot(time, tapered_gaussian_dt(time, hstart, f), ls="--")
-    #     ax.plot(time, np.gradient( tapered_gaussian(time, hstart, f), time) , ls=":")
-    # plt.show() 
-    # quit()
+    #     s = tapered_gaussian(time, hstart, f)
+    #     fr = np.fft.rfftfreq(n = s.size, d=dt)
+    #     ax.plot(fr, abs(np.fft.rfft(s)), ls="--")
+    plt.show() 
+    quit()
 
 
     ### Construct ground sinusoid for our own framework: 
-    # for fi, f0 in enumerate(freq):
-    #     VEL[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
-    #     DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_sinusoid(time, 0e3, f0, c=c), time, initial=0)
-
-    ### Construct ground gaussian for our own framework: 
-    for fi, f0 in enumerate(freq):
-        VEL[0,fi,:] = tapered_gaussian(time, 0e3, f0, c=c)
-        DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_gaussian(time, 0e3, f0, c=c), time, initial=0)
+    ### We use 4 different frequencies 
+    VEL = np.zeros((1,freq.size, Nt))
+    DIS = np.zeros((1,freq.size, Nt))
+    if test=="kenda":
+        for fi, f0 in enumerate(freq):
+            VEL[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
+            DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_sinusoid(time, 0e3, f0, c=c), time, initial=0)
+    elif test=="sutin":
+        # for fi, f0 in enumerate(freq):
+        #     VEL[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
+        #     DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_sinusoid(time, 0e3, f0, c=c), time, initial=0)
+        ### Alternative for Sutin 2018: Construct ground gaussian for our own framework: 
+        for fi, f0 in enumerate(freq):
+            VEL[0,fi,:] = tapered_gaussian(time, 0e3, f0, c=c)
+            DIS[0,fi,:] = integrate.cumulative_trapezoid(tapered_gaussian(time, 0e3, f0, c=c), time, initial=0)
+        
     north_shifts = freq 
     east_shifts = np.array([0. for i in range(north_shifts.size)])
 
+    ### Prepare the SEISMO dictionay that is absorbed by the AirglowSignal class
     SEISMO ={"dt": dt,
              "t_new": time,
              "Nt": Nt,
@@ -3220,16 +4153,19 @@ def check_simple_perturbation_nightglow():
     ### FRAMEWORK CALCUATION (using above classes): 
     ################################################################################################################    
     AR = AirglowSignal(SEISMO, Nz = 500, do_plot=False, disable_att=True)
-    ### Attenuation is disabled, as in BK  
-    ### Wavelength of ver: 
+    ### Attenuation is disabled, as in Kenda (2018)  
+    ### We ensure a constant velocity with 
+    AR.f_c = lambda z: 200*np.ones(z.shape)
+    ### Check wavelength of ver to ensure precision of integration: 
     lambda_min = np.min(AR.f_c(AR.z_1_27_calc_m))/max(freq)
     dz_min = AR.dz_1_27_m
-    print("Min wavelength of VER = {:.1f} m".format(lambda_min))
-    print("Min vertical resolution = {:.1f} m".format(dz_min))
+    print("Min wavelength of VER signal = {:.1f} m".format(lambda_min))
+    print("Achieved vertical resolution = {:.1f} m".format(dz_min))
     if lambda_min<=2*dz_min:
         print("WARNING: vertical resolution of integration might be insufficient for desired frequency")
 
-    ### To concord with BK, the amplitude of the wave must be 5 mm/s at 90 km. 
+    ### To concord with Kenda or Sutin, the amplitude of the wave 
+    ### must be 5 mm/s at 90 km or 40 mm/s at 100 km. 
     ### We therefore rescale VEL using the amplification function 
     AR.VEL = AR.VEL * ampl_at_start/AR.f_amplification(hstart)
     AR.DIS = AR.DIS * ampl_at_start/AR.f_amplification(hstart)
@@ -3244,16 +4180,9 @@ def check_simple_perturbation_nightglow():
     vz_z = dat[0,:,:,:,0]
     ver_z = dat[0,:,:,:,1]
     I1 = dati[0,:,:]
+    ### Select altitude closest to 90 km or 100 km 
     iz = np.argmin(abs(AR.z_1_27_calc_m - hstart))
-    print("Altitude of : ", iz, AR.z_1_27_calc_m[iz] )
-
-    ### TEST RESOLUTION 
-    # fig, ax = plt.subplots() 
-    # for j in range(AR.Nz):
-    #     ax.plot(time, ver_z[0,j,:]/abs(ver_z[0,j,:]).max() + 2*j, c="k")
-    # ax.plot(time, np.sum(ver_z[0,:,:]/np.max(abs(ver_z[0,:,:]), axis=1)[:,None], axis=0) + 2*j+2, c="r")
-    # plt.show()
-
+    print("Test altitude: index {:d}, {:.1f} km".format(iz, AR.z_1_27_calc_m[iz]/1e3) )
 
     ################################################################################################################
     ### Show waveforms at different frequencies 
@@ -3302,9 +4231,10 @@ def check_simple_perturbation_nightglow():
     ###
     fig.align_labels() 
     fig.suptitle("NIGHTGLOW, calculated with Airglow framework")
+    fig.savefig("./results_test/nightglow_wv_" + test + "_framework.pdf")
+    fig.savefig("./results_test/nightglow_wv_" + test + "_framework.png", dpi=600)
     fig.tight_layout()
     ################################################################################################################
-
 
     
 
@@ -3317,18 +4247,21 @@ def check_simple_perturbation_nightglow():
     ax1.plot(AR.f_VER_1_27(AR.z_1_27_calc_m), AR.z_1_27_calc_km, c="k") 
     ax1b = ax1.twiny()
     ax1b.plot(np.max(abs(ver_z[fi_50,:,:]), axis=1)/AR.f_VER_1_27(AR.z_1_27_calc_m)*100, AR.z_1_27_calc_km, c="r", label="Max Perturbation")
-    ax1b.set_xlabel(r"Max. VER$_{1.27}$ perturbation / [%]")
+    ax1b.set_xlabel(r"Max. VER$_{1.27}$ perturbation / [% background]")
     ax1b.xaxis.label.set_color('red')
     ax1.set_xlabel("VER / ph/m3/s")
     ax1.set_ylabel("Altitude / km")
     ax1.set_xlim(0,5.5e11)
+    ax1b.set_xlim(0,1)
     ###
     ax2.plot(AR.f_amplification(AR.z_1_27_calc_m)/AR.f_amplification(90e3), AR.z_1_27_calc_km, c="k", label=r"$\sqrt{\rho(90)c(90)/(\rho(z)c(z))}$") 
     ax2.set_xlabel("Amplification with respect to 90 km")
     ax2.legend(frameon=False, loc=4)
     ax2.set_xlim(0,70)
     ###
-    im = ax3.pcolormesh(time, AR.z_1_27_calc_km, ver_z[fi_50,:,:], vmin=-np.max(np.abs(ver_z[fi_50,:,:])), vmax=np.max(np.abs(ver_z[fi_50,:,:])))
+    im = ax3.pcolormesh(time, AR.z_1_27_calc_km, ver_z[fi_50,:,:], 
+                        vmin=-np.max(np.abs(ver_z[fi_50,:,:])), 
+                        vmax=np.max(np.abs(ver_z[fi_50,:,:])), rasterized=True)
     ax3.axhline(AR.z_1_27_calc_km[np.argmax(np.max(abs(ver_z[fi_50,:,:]), axis=1))], c="w", ls=":", label="Maximum perturbation")
     ax3.axhline(AR.z_1_27_calc_km[np.argmax(AR.f_VER_1_27(AR.z_1_27_calc_m))], c="w", ls="--", label=r"Maximum VER$_{1.27}$")
     fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{1.27}$ [$ph/m^3/s$]")
@@ -3337,14 +4270,15 @@ def check_simple_perturbation_nightglow():
     for text in leg.get_texts():
         text.set_color('w') # Set all legend text to green
     # ax3.set_ylabel("Altitude / [$km$]")
-    ax3.set_xlim(0,1000)
+    ax3.set_xlim(400,800)
     ax3.set_ylim(90,120)
     for ax in [ax1,ax2,ax3]:
         ax.set_ylim(90,120)
     fig.suptitle("NIGHTGLOW, calculated with Airglow framework")
+    fig.savefig("./results_test/nightglow_2d_" + test + "_framework.pdf")
+    fig.savefig("./results_test/nightglow_2d_" + test + "_framework.png", dpi=600)
     fig.tight_layout()
     ################################################################################################################
-
 
 
     ################################################################################################################
@@ -3387,6 +4321,8 @@ def check_simple_perturbation_nightglow():
     ###
     fig.tight_layout()
     # plt.show()
+    # print("here 3")
+
     
 
 
@@ -3394,17 +4330,16 @@ def check_simple_perturbation_nightglow():
     ### HANDMADE CALCUATION (analytical sinusoid): 
     ################################################################################################################    
     ### 0. Pick frequency 
-    # f0s = 1/50
-    f0s = np.array([0.2,0.1,0.02, 0.01])
-    ### 1. Make up an altitude range  
+    # f0s = np.array([0.2,0.1,0.02, 0.01])
+    f0s = freq
+    ### 1. Make up an altitude range  (must be wider than the VER region!)
     zrange = np.linspace(80e3,140e3,400)
     ### 2. Get frequencies 
     ff = np.fft.fftfreq(Nt, d=dt)
     om = ff*(2*np.pi)
-    ### 4. Get amplification, normalize by the value at 90 km: 
+    ### 4. Get amplification, normalize by the value at 90/100 km: 
     a_func = AR.f_amplification(zrange)[:,None]/AR.f_amplification(hstart)
-    a_func2 = np.sqrt(AR.f_rho(90e3)/ (AR.f_rho(zrange)))   ### Alternative definition, without sound speed 
-
+    
     ### Function to generate a sinusoid at a specific frequency and its dVER 
     # def calculate_airglow_sinusoid(f0):
     #     ### 5. Defined derivative of tapered sinusoid (functions above) and normalize by amplitude 
@@ -3439,7 +4374,6 @@ def check_simple_perturbation_nightglow():
     #     return(tVEL, dver, I)
     # I_background = np.trapz(AR.f_VER_1_27(zrange), zrange, axis=0 )
 
-
     ### Even simpler method: define derivative of sinusoid explicitely 
     zatt = np.concatenate((np.linspace(0,zrange[0]-1e3,200),zrange))
     phase = np.exp(-2*1j*np.pi*ff[None,:]*integrate.cumulative_trapezoid(1/AR.f_c(zatt), zatt, initial=0)[:,None])
@@ -3448,16 +4382,20 @@ def check_simple_perturbation_nightglow():
     ampl = AR.f_amplification(zatt)[:,None]/AR.f_amplification(hstart)
     dampl_dz = np.gradient(ampl, zatt, axis=0) 
     
-    def calculate_airglow_sinusoid(f0):
-        # tVEL = tapered_sinusoid(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start 
-        tVEL = tapered_gaussian(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start 
+    def calculate_airglow_perturbation(f0):
+        if test=="kenda":
+            tVEL = tapered_sinusoid(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start 
+        elif test=="sutin":
+            # tVEL = tapered_sinusoid(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start 
+            tVEL = tapered_gaussian(time[None,:], zatt[:,None]*0, f0, c=c) * ampl_at_start
         fftVEL = np.fft.fft(tVEL, axis=1)
         ### VEL(z,f) = VEL(0,f)*exp(-2*1j*pi*f*int_0_z(1/c dz))*exp(-int_0_z(alpha dz)*ampl(z))
         ### dVEL(z,f)_dz = VEL(0,f)*(dphase_dz⋅ampl⋅att + dampl_dz⋅phase⋅att + datt_dz⋅phase⋅ampl)
         fft_dver = fftVEL*(dphase_dz*ampl + dampl_dz*phase)*AR.f_VER_1_27(zatt)[:,None]
         fft_dver = fft_dver[-zrange.size:,:]
         ###
-        tVEL = np.fft.ifft(fftVEL*(dphase_dz*ampl + dampl_dz*phase), axis=1).real
+        tVEL = np.fft.ifft(fftVEL*ampl*phase, axis=1).real
+        tVEL = tVEL[-zrange.size:,:]
         ###
         tau = 4460 # s 
         dver = np.fft.ifft(fft_dver*-tau/(1+1j*om[None,:]*tau), axis=1).real
@@ -3487,12 +4425,12 @@ def check_simple_perturbation_nightglow():
     fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,9)) 
     cmap = plt.get_cmap("plasma")
     cols = [cmap(i) for i in np.linspace(0.2, 0.8, f0s.size)]
-    ### Original vel shape
-    # iz = 0  
-    iz2 = np.argmin(abs(zrange-AR.z_1_27_calc_m[iz]))   ### To ensure we plot the same altitude as the other method 
-    ### Propagated at 90 km 
+    ### To ensure we plot the same altitude as the other method 
+    iz2 = np.argmin(abs(zrange-AR.z_1_27_calc_m[iz])) 
+
     for fi, f0 in enumerate(f0s):
-        tVEL, dver, I = calculate_airglow_sinusoid(f0)
+        ### Do the calculation for f0 
+        tVEL, dver, I = calculate_airglow_perturbation(f0)
 
         ### Starting waveform at 90 km 
         ax2.plot(time, tVEL[iz2,:], c=cols[fi], label="f={:.3g} Hz, T={:.3g} s".format(f0, 1/f0))
@@ -3513,9 +4451,9 @@ def check_simple_perturbation_nightglow():
         ax4.plot(time, I/I_background*100, c=cols[fi])
         if fi== f0s.size-1:
             ax4b = ax4.twinx() 
-            ax4b.plot(time, I*AR._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"), c="k", ls=" ")
+            ax4b.plot(time, I*factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"), c="k", ls=" ")
             ax4.set_ylim(imin/I_background*100, imax/I_background*100)
-            ax4b.set_ylim(imin*AR._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"), imax*AR._factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"))
+            ax4b.set_ylim(imin*factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"), imax*factor_W_to_Rayleigh(1.27, dir="phRadiance_to_Rayleigh"))
     ###
     ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$m/s$]")
     ax3.set_ylabel("VER$_{1.27}$ pert. at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [%]")
@@ -3530,6 +4468,8 @@ def check_simple_perturbation_nightglow():
     ###
     fig.align_labels() 
     fig.suptitle("NIGHTGLOW, calculated with Homemade sine framework")
+    fig.savefig("./results_test/nightglow_wv_" + test + "_sine.pdf")
+    fig.savefig("./results_test/nightglow_wv_" + test + "_sine.png", dpi=600)
     fig.tight_layout()
     ################################################################################################################
     
@@ -3537,21 +4477,21 @@ def check_simple_perturbation_nightglow():
     ################################################################################################################
     ### Calculate for T=50s 
     ################################################################################################################
-    tVEL, dver, I = calculate_airglow_sinusoid(1/50)
+    tVEL, dver, I = calculate_airglow_perturbation(1/50)
 
     fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
     ###
     ax1.plot(AR.f_VER_1_27(zrange), zrange/1e3, c="k") 
     ax1b = ax1.twiny()
     ax1b.plot(np.max(abs(dver), axis=1)/AR.f_VER_1_27(zrange)*100, zrange/1e3, c="r", label="Max Perturbation")
-    ax1b.set_xlabel(r"Max. VER$_{1.27}$ perturbation / [%]")
+    ax1b.set_xlabel(r"Max. VER$_{1.27}$ perturbation / [% background]")
     ax1b.xaxis.label.set_color('red')
     ax1.set_xlabel("VER / ph/m3/s")
     ax1.set_ylabel("Altitude / km")
     ax1.set_xlim(0,5.5e11)
+    ax1b.set_xlim(0,1)
     ###
     ax2.plot(AR.f_amplification(zrange)/AR.f_amplification(90e3), zrange/1e3, c="k", label=r"$\sqrt{\rho(90)c(90)/(\rho(z)c(z))}$") 
-    ax2.plot(a_func2, zrange/1e3, c="grey", ls="--", label=r"$\sqrt{\rho(90)/\rho(z)}$") 
     ax2.set_xlabel("Amplification with respect to 90 km")
     ax2.legend(frameon=False, loc=4)
     ax2.set_xlim(0,70)
@@ -3565,31 +4505,35 @@ def check_simple_perturbation_nightglow():
     for text in leg.get_texts():
         text.set_color('w') # Set all legend text to green
     # ax3.set_ylabel("Altitude / [$km$]")
-    ax3.set_xlim(0,800)
+    ax3.set_xlim(400,800)
     ax3.set_ylim(90,120)
     for ax in [ax1,ax2,ax3]:
         ax.set_ylim(90,120)
     fig.suptitle("NIGHTGLOW, calculated with Homemade sine framework")
+    fig.savefig("./results_test/nightglow_2d_" + test + "_sine.pdf")
+    fig.savefig("./results_test/nightglow_2d_" + test + "_sine.png", dpi=600)
     fig.tight_layout()
     # plt.show()
     ################################################################################################################
     
 
-def check_simple_perturbation_dayglow():
+def check_simple_perturbation_dayglow(test="kenda"):
     ### As in Balthasar Kenda's thesis, we send a sinusoidal perturbation with amplitude defined at 90 km 
 
-    freq = np.array([0.2,0.1,0.02, 0.01]) ### Hz
-    # freq = np.array([0.01]) ### Hz
-    c = 200                ### m/s
+    ### Time parameters 
     dt = 0.1               ### s
     tf = 1000              ### s
-    hstart = 90e3  ### m   ### To test BK 
-    ampl_at_start = 5e-3   ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda) 
-
     time = np.arange(-tf/10, tf, dt)
     Nt = time.size
-    VEL = np.zeros((1,freq.size, Nt))
-    DIS = np.zeros((1,freq.size, Nt))
+
+    ### Input waveform parameters 
+    freq = np.array([0.2,0.1,0.02, 0.01]) ### Hz
+    # freq = np.array([0.01]) ### Hz
+    if test=="kenda":
+        c = 200                ### Fixed vertical propagation velocity m/s
+        hstart = 90e3          ### m   
+        ampl_at_start = 5e-3   ### Ampl of Mw 6.5, 30degree distance, 90 km alt (kenda) 
+
 
     def tapered_sinusoid(t, z, f0, c=200):
         ### Tapered sinusoid propagating at speed c 
@@ -3662,8 +4606,11 @@ def check_simple_perturbation_dayglow():
     # plt.show() 
     # quit()
 
-
-    ### Construct ground sinusoid for our own framework: 
+    ### Construct ground sinusoid for our framework
+    VEL = np.zeros((1,freq.size, Nt))
+    DIS = np.zeros((1,freq.size, Nt))
+    ### Construct ground sinusoid for our own framework. 
+    ### This time the displacement is a sinusoid, the velocity its derivative.
     for fi, f0 in enumerate(freq):
         VEL[0,fi,:] = tapered_sinusoid_dt(time, 0e3, f0, c=c)
         DIS[0,fi,:] = tapered_sinusoid(time, 0e3, f0, c=c)
@@ -3675,6 +4622,7 @@ def check_simple_perturbation_dayglow():
     north_shifts = freq 
     east_shifts = np.array([0. for i in range(north_shifts.size)])
 
+    ### Prepare the SEISMO dictionay that is absorbed by the AirglowSignal class
     SEISMO ={"dt": dt,
              "t_new": time,
              "Nt": Nt,
@@ -3693,9 +4641,19 @@ def check_simple_perturbation_dayglow():
     ### FRAMEWORK CALCUATION (using above classes): 
     ################################################################################################################    
     AR = AirglowSignal(SEISMO, Nz = 500, do_plot=False, disable_att=False)
-    ### We keep attenuation this time, as in BK 
+    ### Attenuation is NOT disabled, as in Kenda (2018)  
+    ### However, we ensure a constant velocity with 
+    AR.f_c = lambda z: 200*np.ones(z.shape)
+    ### Check wavelength of ver to ensure precision of integration: 
+    lambda_min = np.min(AR.f_c(AR.z_4_28_calc_m))/max(freq)
+    dz_min = AR.dz_4_28_m
+    print("Min wavelength of VER signal = {:.1f} m".format(lambda_min))
+    print("Achieved vertical resolution = {:.1f} m".format(dz_min))
+    if lambda_min<=2*dz_min:
+        print("WARNING: vertical resolution of integration might be insufficient for desired frequency")
 
-    ### To concord with BK, the amplitude of the wave must be 5 mm/s at 90 km. 
+    ### To concord with Kenda or Sutin, the amplitude of the wave 
+    ### must be 5 mm/s at 90 km or 40 mm/s at 100 km. 
     ### We therefore rescale VEL using the amplification function 
     AR.VEL = AR.VEL * ampl_at_start/AR.f_amplification(hstart)
     AR.DIS = AR.DIS * ampl_at_start/AR.f_amplification(hstart)
@@ -3710,8 +4668,9 @@ def check_simple_perturbation_dayglow():
     vz_z = dat[0,:,:,:,0]
     ver_z = dat[0,:,:,:,1]
     I1 = dati[0,:,:]
+    ### Select altitude closest to 90 km or 100 km 
     iz = np.argmin(abs(AR.z_4_28_calc_m - hstart))
-    print("Altitude of : ", iz, AR.z_4_28_calc_m[iz] )
+    print("Test altitude: index {:d}, {:.1f} km".format(iz, AR.z_4_28_calc_m[iz]/1e3) )
 
     ################################################################################################################
     fig, (ax2, ax3, ax4) = plt.subplots(3,1, sharex = True, figsize=(7,9)) 
@@ -3719,8 +4678,7 @@ def check_simple_perturbation_dayglow():
     cols = [cmap(i) for i in np.linspace(0.2, 0.8, freq.size)]
     ### Propagated at 90 km 
     for fi, f in enumerate(freq):
-
-        ### Starting waveform at 90 km 
+        ### Starting waveform at 90/100 km 
         ax2.plot(time, np.gradient(vz_z[fi,iz,:], time), c=cols[fi], label="f={:.3g} Hz, T={:.3g} s".format(f, 1/f))
         if fi == freq.size-1:
             ax2.set_ylim(-1.5*ampl_at_start,1.5*ampl_at_start)
@@ -3757,6 +4715,8 @@ def check_simple_perturbation_dayglow():
     ###
     fig.align_labels() 
     fig.suptitle("DAYGLOW, calculated with Airglow framework")
+    fig.savefig("./results_test/dayglow_wv_" + test + "_framework.pdf")
+    fig.savefig("./results_test/dayglow_wv_" + test + "_framework.png", dpi=600)
     fig.tight_layout()
     ################################################################################################################
 
@@ -3770,7 +4730,7 @@ def check_simple_perturbation_dayglow():
     ax1.plot(AR.f_VER_4_28(AR.z_4_28_calc_m), AR.z_4_28_calc_km, c="k") 
     ax1b = ax1.twiny()
     ax1b.plot(np.max(abs(ver_z[fi_50,:,:]), axis=1)/AR.f_VER_4_28(AR.z_4_28_calc_m)*100, AR.z_4_28_calc_km, c="r", label="Max Perturbation")
-    ax1b.set_xlabel(r"Max. VER$_{4.28}$ perturbation / [%]")
+    ax1b.set_xlabel(r"Max. VER$_{4.28}$ perturbation / [% background]")
     ax1b.xaxis.label.set_color('red')
     ax1.set_xlabel("VER / ph/m3/s")
     ax1.set_ylabel("Altitude / km")
@@ -3784,21 +4744,25 @@ def check_simple_perturbation_dayglow():
     ###
     fac=AR._factor_photons_watt(4.28, dir="ps_to_W")
     # print(fac)
-    im = ax3.pcolormesh(time, AR.z_4_28_calc_km, ver_z[fi_50,:,:]*fac, vmin=-np.max(np.abs(ver_z[fi_50,:,:]))*fac, vmax=np.max(np.abs(ver_z[fi_50,:,:]))*fac)
+    im = ax3.pcolormesh(time, AR.z_4_28_calc_km, ver_z[fi_50,:,:]*fac, 
+                        vmin=-np.max(np.abs(ver_z[fi_50,:,:]))*fac, 
+                        vmax=np.max(np.abs(ver_z[fi_50,:,:]))*fac, rasterized=True)
     ax3.axhline(AR.z_4_28_calc_km[np.argmax(np.max(abs(ver_z[fi_50,:,:]), axis=1))], c="w", ls=":", label="Maximum perturbation")
     ax3.axhline(AR.z_4_28_calc_km[np.argmax(AR.f_VER_4_28(AR.z_4_28_calc_m))], c="w", ls="--", label=r"Maximum VER$_{4.28}$")
     # fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{4.28}$ [$ph/m^3/s$]")
     fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{4.28}$ [$W/m^3$]")
     ax3.set_xlabel("Time / [$s$]")
-    leg = ax3.legend(frameon=False, loc=2)
+    leg = ax3.legend(frameon=False, loc=3)
     for text in leg.get_texts():
         text.set_color('w') # Set all legend text to green
     # ax3.set_ylabel("Altitude / [$km$]")
-    ax3.set_xlim(0,1000)
+    ax3.set_xlim(500,1000)
     ax3.set_ylim(90,150)
     for ax in [ax1,ax2,ax3]:
         ax.set_ylim(90,150)
     fig.suptitle("DAYGLOW, calculated with Airglow framework")
+    fig.savefig("./results_test/dayglow_2d_" + test + "_framework.pdf", dpi=600)
+    fig.savefig("./results_test/dayglow_2d_" + test + "_framework.png", dpi=600)
     fig.tight_layout()
     ################################################################################################################
 
@@ -3807,9 +4771,9 @@ def check_simple_perturbation_dayglow():
     ### HANDMADE CALCUATION (analytical sinusoid): 
     ################################################################################################################    
     ### 0. Pick frequency 
-    # f0s = 1/50
-    f0s = np.array([0.2,0.1,0.02, 0.01])
-    ### 1. Make up an altitude range  
+    # f0s = np.array([0.2,0.1,0.02, 0.01])
+    f0s = freq
+    ### 1. Make up an altitude range (Must be wider than VER region!)
     zrange = np.linspace(90e3,160e3,200)
     ### 2. Get frequencies / omega 
     ff = np.fft.fftfreq(Nt, d=dt)
@@ -3817,7 +4781,6 @@ def check_simple_perturbation_dayglow():
     om = ff*(2*np.pi)
     ### 4. Get amplification, normalize by the value at 90 km: 
     a_func = AR.f_amplification(zrange)[:,None]/AR.f_amplification(hstart)
-    a_func2 = np.sqrt(AR.f_rho(90e3)/ (AR.f_rho(zrange)))   ### Alternative definition, without sound speed 
     ### 5. Calculate attenuation term 
     zatt = np.concatenate((np.linspace(0,zrange[0]-1e3,50),zrange))
     FFver, ZZver2 = np.meshgrid(fr_fft, zatt  )
@@ -3828,10 +4791,11 @@ def check_simple_perturbation_dayglow():
     a_func = a_func * att_exp 
     
     ### Function to generate a sinusoid at a specific frequency and its dVER 
-    def calculate_airglow_sinusoid(f0):
+    def calculate_airglow_perturbation(f0):
         ### 6. Defined derivative of tapered sinusoid (functions above) and normalize by amplitude 
-        tVEL = tapered_sinusoid_dt(time[None,:], zrange[:,None], f0, c=c)  
-        tVEL_dz = np.gradient(tapered_sinusoid_dz(time[None,:], zrange[:,None], f0, c=c), time, axis=1) 
+        if test=="kenda":
+            tVEL = tapered_sinusoid_dt(time[None,:], zrange[:,None], f0, c=c)  
+            tVEL_dz = np.gradient(tapered_sinusoid_dz(time[None,:], zrange[:,None], f0, c=c), time, axis=1) 
         tvmax = np.abs(tVEL).max()
         tVEL = tVEL/tvmax * ampl_at_start
         tVEL_dz = tVEL_dz/tvmax * ampl_at_start
@@ -3842,7 +4806,7 @@ def check_simple_perturbation_dayglow():
         fftDIS = np.fft.fft(tDIS, axis=1)
 
         ### 8. Calculate the desired dver in frequency domain (EQ 4.22): 
-        ### Calculate gradient of vel manually. NOTE: a_func contains both amplificaiton and attenuation  
+        ### Calculate gradient of vel manually. NOTE: a_func contains both amplification and attenuation  
         fft_dver = AR.alpha_t * AR.f_VER_4_28(zrange)[:,None] * (AR.f_gamma(zrange)[:,None]-1)* AR.f_t(zrange)[:,None]*\
                                 (np.gradient(fftDIS, zrange, axis=0)*a_func  + fftDIS*np.gradient(a_func, zrange, axis=0) ) 
         ### 9. OPTIONAL: Add advection term (don't forget amplification of u): 
@@ -3870,13 +4834,13 @@ def check_simple_perturbation_dayglow():
     cmap = plt.get_cmap("plasma")
     cols = [cmap(i) for i in np.linspace(0.2, 0.8, f0s.size)]
     ### Original vel shape
-    # iz = 0  
     iz2 = np.argmin(abs(zrange-AR.z_4_28_calc_m[iz]))   ### To ensure we plot the same altitude as the other method 
     ### Propagated at 90 km 
     for fi, f0 in enumerate(f0s):
-        tDIS, dver, I = calculate_airglow_sinusoid(f0)
+        tDIS, dver, I = calculate_airglow_perturbation(f0)
 
         ### Starting waveform at 90 km 
+        print("max displacement: ", np.max(np.abs(tDIS[iz2,:])) )
         ax2.plot(time, np.gradient(tDIS[iz2,:],time), c=cols[fi], label="f={:.3g} Hz, T={:.3g} s".format(f0, 1/f0))
         if fi == f0s.size-1:
             ax2.set_ylim(-1.5*ampl_at_start,1.5*ampl_at_start)
@@ -3895,9 +4859,9 @@ def check_simple_perturbation_dayglow():
         ax4.plot(time, I/I_background*100, c=cols[fi])
         if fi== f0s.size-1:
             ax4b = ax4.twinx() 
-            ax4b.plot(time, I*AR._factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"), c="k", ls=" ")
+            ax4b.plot(time, I*factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"), c="k", ls=" ")
             ax4.set_ylim(imin/I_background*100, imax/I_background*100)
-            ax4b.set_ylim(imin*AR._factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"), imax*AR._factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"))
+            ax4b.set_ylim(imin*factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"), imax*factor_W_to_Rayleigh(4.28, dir="phRadiance_to_Rayleigh"))
     ###
     ax2.set_ylabel(r"$V_z$ at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [$m/s$]")
     ax3.set_ylabel("VER$_{4.28}$ pert. at " + "{:.1f} km".format(zrange[iz2]/1e3) + r" / [%]")
@@ -3912,6 +4876,8 @@ def check_simple_perturbation_dayglow():
     ###
     fig.align_labels() 
     fig.suptitle("DAYGLOW, calculated with Homemade sine framework")
+    fig.savefig("./results_test/dayglow_wv_" + test + "_sine.pdf")
+    fig.savefig("./results_test/dayglow_wv_" + test + "_sine.png", dpi=600)
     fig.tight_layout()
     ################################################################################################################
     
@@ -3919,41 +4885,45 @@ def check_simple_perturbation_dayglow():
     ################################################################################################################
     ### Calculate for T=50s 
     ################################################################################################################
-    tVEL, dver, I = calculate_airglow_sinusoid(1/50)
+    tVEL, dver, I = calculate_airglow_perturbation(1/50)
 
     fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(12,7))
     ###
     ax1.plot(AR.f_VER_4_28(zrange), zrange/1e3, c="k") 
     ax1b = ax1.twiny()
     ax1b.plot(np.max(abs(dver), axis=1)/AR.f_VER_4_28(zrange)*100, zrange/1e3, c="r", label="Max Perturbation")
-    ax1b.set_xlabel(r"Max. VER$_{4.28}$ perturbation / [%]")
+    ax1b.set_xlabel(r"Max. VER$_{4.28}$ perturbation / [% background]")
     ax1b.xaxis.label.set_color('red')
     ax1.set_xlabel("VER / ph/m3/s")
     ax1.set_ylabel("Altitude / km")
     ax1.set_xlim(0,7e12)
     ###
     ax2.plot(AR.f_amplification(zrange)/AR.f_amplification(90e3), zrange/1e3, c="k", label=r"$\sqrt{\rho(90)c(90)/(\rho(z)c(z))}$") 
-    ax2.plot(a_func2, zrange/1e3, c="grey", ls="--", label=r"$\sqrt{\rho(90)/\rho(z)}$") 
     ax2.set_xlabel("Amplification with respect to 90 km")
     ax2.set_xscale("log")
     ax2.legend(frameon=False, loc=4)
     ax2.set_xlim(1,1e4)
     ###
-    im = ax3.pcolormesh(time, zrange/1e3, dver[:,:]*fac, vmin=-np.max(np.abs(dver))*fac, vmax=np.max(np.abs(dver))*fac)
+    print(np.max(np.abs(dver)),np.max(np.abs(dver))*fac)
+    im = ax3.pcolormesh(time, zrange/1e3, dver[:,:]*fac, 
+                        vmin=-np.max(np.abs(dver))*fac, 
+                        vmax=np.max(np.abs(dver))*fac, rasterized=True)
     ax3.axhline(zrange[np.argmax(np.max(abs(dver), axis=1))]/1e3, c="w", ls=":", label="Maximum perturbation")
     ax3.axhline(zrange[np.argmax(AR.f_VER_4_28(zrange))]/1e3, c="w", ls="--", label=r"Maximum VER$_{4.28}$")
     # fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{4.28}$ [$ph/m^3/s$]")
     fig.colorbar(im, ax=ax3, label=r"$\Delta$VER$_{4.28}$ [$W/m^3$]")
     ax3.set_xlabel("Time / [$s$]")
-    leg = ax3.legend(frameon=False, loc=2)
+    leg = ax3.legend(frameon=False, loc=3)
     for text in leg.get_texts():
         text.set_color('w') # Set all legend text to green
     # ax3.set_ylabel("Altitude / [$km$]")
-    ax3.set_xlim(0,1000)
+    ax3.set_xlim(500,1000)
     ax3.set_ylim(90,150)
     for ax in [ax1,ax2,ax3]:
         ax.set_ylim(90,150)
     fig.suptitle("DAYGLOW, calculated with Homemade sine framework")
+    fig.savefig("./results_test/dayglow_2d_" + test + "_sine.pdf", dpi=600)
+    fig.savefig("./results_test/dayglow_2d_" + test + "_sine.png", dpi=600)
     fig.tight_layout()
     # plt.show()
     ################################################################################################################
@@ -4149,8 +5119,432 @@ def check_Lognonne_2016():
     fig.savefig(dir_save + "Nightglow_Dayglow_traces_PL2016_dirac.png", dpi=300)
 
     
+def minimal_example(test_waveform=False, test_sinusoid=False):
+
+    def tapered_sinusoid(t, z, f0, c=200):
+        ### Tapered sinusoid propagating at speed c 
+        sig = np.sin(2*np.pi*f0*(t - z/c))
+        Nsine = int((1/f0)/dt)
+        tp = tukey(Nsine, alpha=0.0)
+
+        tap = np.zeros(t.shape)
+        Nt = t.size
+        Nt0 = np.where(t<0)[0].size
+        if np.isscalar(z):
+            Nprop = int(z/c/dt)
+            tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+            sig*=tap
+        else:
+            for i in range(z.size):
+                Nprop = int(z[i,0]/c/dt)
+                tap = np.pad(tp,(int(Nt0+Nprop),int(Nt-Nt0-tp.size-Nprop)))
+                sig[i,:]*=tap
+        return(sig)
+    
+
+    from scipy.fft import next_fast_len
+    ### Calculation of Integrated VER (in Rayleigh) at different epicentral distances
+    ### For a Mw 6.5 (M0 = 10e19 Nm) earthquake.
+    ### Epicentral distances = [15, 30, 45, 60]
+
+    ### First, define the grid of locations. 
+    gridded       = False
+    r_venus = 6051.8e3  ### m 
+    north_shifts  = np.array([15., 30., 45., 60.])*2*np.pi*r_venus/360
+    east_shifts   = np.array([0. for i in range(north_shifts.size)])
+
+    # ### Option for Pyrocko 
+    opt_synthetics = dict(
+        ### Options for source 
+        mw = 6.5,              ### if none: We only get the Green's function
+        depth = 30e3,          ### Only one depth
+        strike = 45.,           ### Default mechanism 
+        dip =  45., 
+        rake = 45.,
+        stf_type = None,       ### Dirac source 
+        #stf_type = 'triangle', 
+        # stf_type = 'sinus', 
+        # effective_duration = 9.,
+        ###  
+        ### Options for store
+        base_folder='/projects/restricted/infrasound/data/infrasound/2023_Venus_inversion/',
+        ### Old option, single store 
+        #store_id = 'GF_venus_Cold100_qssp',
+        #store_id = 'GF_venus_Cold100_qssp_grid',
+        ### Give store names, and min and max valid distance 
+        #store_ids_dists = [('GF_venus_Cold100_qssp_grid',0e3,500e3),('GF_venus_Cold100_qssp_grid_mid',500e3,8000e3)],
+        store_ids_dists = [('GF_venus_Cold100_atten_qssp_nearfield',0e3,50e3),('GF_venus_Cold100_atten_qssp',50e3,8000e3)],
+        ###
+        ### Options for grid 
+        north_shifts = north_shifts, 
+        east_shifts = east_shifts,
+        gridded=gridded
+    )
+
+    ### INITIALIZE SEISMOGRAM CLASS 
+    ### we build seismograms over grid
+    ### 
+    SEISMO = Seismograms(**opt_synthetics)
+    print("Total grid size: ", SEISMO.NN.size)
+
+    ### [1584.3e3, 3168.7e3, 4753.0e3 6337.4e3]
+    ns, es       = 1584.3e3, 0e3
+    ### Plot one of the waveforms for check
+    fig = SEISMO.plot_traces(ns, es, do_interpolate=True)
+
+    SEISMO.arrange_interpolate_synthetics(tmax=60*60, dt=0.5)
+
+    ### Load airglow class 
+    AIRGLOW = AirglowSignal(SEISMO, Nz=1000)
+
+    dir_save="./results_minimal_example/"
+    if not os.path.exists(dir_save):
+        os.makedirs(dir_save)
+
+    for i in range(4):
+        np.savetxt(dir_save + "time_velocity_displacement_Mw_{:.1f}_{:.0f}deg.dat".format(6.5, north_shifts[i]*180/(np.pi*r_venus) ),
+                    np.column_stack((AIRGLOW.t_new, AIRGLOW.VEL[0,i,:], AIRGLOW.DIS[0,i,:])) , header='Time [s] , Velocity [m/s], Displacement [m/s]')
+    
+    zver = np.linspace(0,160e3,1000)
+    np.savetxt(dir_save + "altitude_nightglow_dayglow_ph_s_m3.dat", 
+                    np.column_stack((zver, AIRGLOW.f_VER_1_27(zver), AIRGLOW.f_VER_4_28(zver))), header="Altitude [m], VER 1.27 [ph/s/m3], VER 4.28 [ph/s/m3]" )
+
+    np.savetxt(dir_save + "atmosphere_z_T_rho_c_gamma.dat",
+               np.column_stack((zver, AIRGLOW.f_t(zver), AIRGLOW.f_rho(zver), AIRGLOW.f_c(zver), AIRGLOW.f_gamma(zver))), 
+               header = "Altitude [m], Temperature [K], Density [kg/m3], Sound speed [m/s], Heat capacity ratio gamma")
+
+    dir_save="./results_minimal_example/"
+    ### Load atmosphere: 
+    dat_atm = np.loadtxt(dir_save + "atmosphere_z_T_rho_c_gamma.dat")
+    alt_atm = dat_atm[:,0]    ### meters
+    T_atm = dat_atm[:,1]      ### K
+    rho_atm = dat_atm[:,2]    ### kg/m3
+    c_atm = dat_atm[:,3]      ### m/s
+    gamma_atm = dat_atm[:,4]  ### unit 
+
+    ### Load VER (Converted to ph/s/m3)
+    dat_ver = np.loadtxt(dir_save + "altitude_nightglow_dayglow_ph_s_m3.dat")
+    alt_ver = dat_ver[:,0]    ### meters
+    ver_1_27 = dat_ver[:,1]      ### ph/s/m3
+    ver_4_28 = dat_ver[:,2]    ### ph/s/m3
+
+    if test_waveform:
+        ### Load waveform (Calculated for Mw 6.5 at different distances)
+        dist = np.array([15., 30., 45., 60.])
+        vel = [] 
+        dis = []
+        for i, d in enumerate(dist): 
+            dat_vu = np.loadtxt(dir_save + "time_velocity_displacement_Mw_6.5_{:.0f}deg.dat".format(d))
+            vel.append(dat_vu[:,1])
+            dis.append(dat_vu[:,2])
+            time = dat_vu[:,0]
+        vel = np.array(vel)  ### Velocity shape [distance, time]
+        dis = np.array(dis)  ### Displacement shape [distance, time]
+        Nd = dist.size
+        dt = time[1]-time[0]
+    elif test_sinusoid:
+        ### Calculate a sinusoid excitation 
+        ### Scale it to 5e-3 at 90 km altitude, 30 deg distance 
+        freq = [0.2, 0.1, 0.02, 0.01]
+        vel = [] 
+        dis = [] 
+        dt = 0.5
+        time = np.arange(-1000,1000,dt)
+        for fi, f0 in enumerate(freq):
+            vel.append(tapered_sinusoid(time, 0e3, f0))
+            # dis.append(integrate.cumulative_trapezoid(tapered_sinusoid(time, 0e3, f0), time, initial=0))
+            dis.append(tapered_sinusoid(time, 0e3, f0)/(2*np.pi*f0))
+        vel = np.array(vel)  ### Velocity shape [frequency, time]
+        dis = np.array(dis)  ### Displacement shape [frequency, time]
+    
+        ### To concord with BK, the amplitude of the wave must be 5 mm/s at 90 km. 
+        ### We therefore rescale vel and dis using the amplification function 
+        # ampl_at_start = 5e-3    ### m/s
+        # i90 = np.argmin(abs(alt_atm-90e3))
+        # ampl_90 = np.sqrt(rho_atm[0]*c_atm[0] / (rho_atm[i90]*c_atm[i90]))
+
+        ### To concord with Sutin (2018), the amplitude of the wave must be 4 cm/s at 100 km. 
+        ampl_at_start = 4e-2    ### Ampl of Mw 6.5, 10degree distance, 100 km alt (sutin 2018) 
+        i90 = np.argmin(abs(alt_atm-100e3))
+        ampl_90 = np.sqrt(rho_atm[0]*c_atm[0] / (rho_atm[i90]*c_atm[i90]))
+
+        vel = vel * ampl_at_start/ampl_90
+        dis = dis * ampl_at_start/ampl_90
+
+    Nz = alt_atm.size 
+    Nt = time.size
+
+    ### Propagate velocity / Displacement upward 
+    ### STEP1: Pad displacement + velocity with zeros to avoid problems with FFT 
+    dpad = next_fast_len(Nt*2, real=True) - Nt
+    long_vel = np.pad(vel, ((0,0),(0, dpad )), mode='constant')
+    long_dis = np.pad(dis, ((0,0),(0, dpad )), mode='constant')
+    Ntpad = long_vel.shape[1]
+
+    ### STEP2. Take fft 
+    fft_vel = np.fft.fft(long_vel, axis=1)
+    fft_dis = np.fft.fft(long_dis, axis=1)
+    freqsi = np.fft.fftfreq(n=Ntpad, d=dt)
+
+    ### STEP3. Delay
+    phase_shift_z = np.zeros((Nz, Ntpad), dtype = np.complex64)
+    ### Integrate travel time from zero to z 
+    travel_time = integrate.cumulative_trapezoid(1/c_atm, alt_atm, initial=0)
+    for jz in range(Nz): 
+        phase_shift_z[jz,:] = np.exp(-2 * np.pi * freqsi * 1j * travel_time[jz] )
+    fft_vel_delayed = fft_vel[:,None,:]*phase_shift_z[None,:,:]
+    fft_dis_delayed = fft_dis[:,None,:]*phase_shift_z[None,:,:]
+
+    # fig, ax = plt.subplots() 
+    # vel_delayed = np.fft.ifft(fft_vel_delayed, axis=2)
+    # vel_delayed_norm = vel_delayed/np.max(np.abs(vel_delayed), axis=2)[:,:,None]
+    # for i, z in enumerate(alt_atm):
+    #     ax.plot(time, vel_delayed_norm[0,i,:]+ z/1e3, c="k", lw=1)
+    
+
+    ### STEP4. Amplify 
+    amplification = np.sqrt( (rho_atm[0][None]*c_atm[0][None]) / (rho_atm*c_atm) )
+    fft_vel_amplified = fft_vel_delayed * amplification[None,:,None]
+    fft_dis_amplified = fft_dis_delayed * amplification[None,:,None]
+
+    ### STEP5. Attenuate 
+    ### We don't apply attenuation here 
+    ### But it would be something like 
+    ### attenuation = grid[Nz, Nt] in Np/m 
+    ### att_exp = np.exp(-integrate.cumulative_trapezoid(attenuation, alt_atm, axis=0))   
+
+    ### STEP6. For 1.27 airglow: apply filter 
+    tau = 4460    ### seconds
+    fft_vel_filtered = fft_vel_amplified*-(tau/(1 + 1j*2*np.pi*freqsi[None,None,:]*tau)) 
+
+    ### STEP7. Calculate dver at all altitudes 
+    ### First calculate d/dz(VER*v_z) --> amplitudes will be zero after integration 
+    # fft_dver = np.gradient(fft_vel_filtered*ver_1_27[None,:,None], alt_atm, axis=1)
+    ### First calculate VER*d/dz(v_z)
+    fft_dver_1_27 = np.gradient(fft_vel_filtered, alt_atm, axis=1)*ver_1_27[None,:,None]
+    ### Then go back to time domain 
+    dver_1_27 = np.fft.ifft(fft_dver_1_27, axis=2).real
+    ### Remove zero-padding 
+    dver_1_27 = dver_1_27[:,:,:-Nt]
+
+    ### For 4.28 airglow: define the temperature sensitivity 
+    alpha_t = 0.01  ### 1% change if dVER/VER for 1 K 
+    fft_dver_4_28 = alpha_t * ver_4_28[None,:,None]* (gamma_atm[None,:,None]-1)*T_atm[None,:,None] * np.gradient(fft_dis_amplified, alt_atm, axis=1)
+     ### Then go back to time domain 
+    dver_4_28 = np.fft.ifft(fft_dver_4_28, axis=2).real
+    ### Remove zero-padding 
+    dver_4_28 = dver_4_28[:,:,:-Nt]
+
+    ### STEP8. Calculate light intensity 
+    I_photons_1_27 = integrate.trapezoid(dver_1_27, alt_atm, axis=1)
+    ### Convert to rayleigh 
+    I_rayleigh_1_27 = I_photons_1_27*4*np.pi/1e10
+    ### Remove integration trend 
+    start = I_rayleigh_1_27[:,0][:,None]
+    end   = I_rayleigh_1_27[:,50][:,None]
+    trend = np.linspace(0, 1, Nt)   
+    trend = start + (end - start)/(trend[50]-trend[0]) * trend  
+    I_rayleigh_1_27 = I_rayleigh_1_27 - trend
+
+    I_photons_4_28 = integrate.trapezoid(dver_4_28, alt_atm, axis=1)
+    ### Convert to rayleigh 
+    I_rayleigh_4_28 = I_photons_4_28*4*np.pi/1e10
+
+    ### STEP9. Calculate background 
+    I_background_1_27 = integrate.trapezoid(ver_1_27, alt_atm)*4*np.pi/1e10
+    I_background_4_28 = integrate.trapezoid(ver_4_28, alt_atm)*4*np.pi/1e10
 
     
+    
+    ### STEP10. Plot 
+    def make_figure_waveform():
+        fig = plt.figure(figsize=(10, 8))
+        gs = gridspec.GridSpec(4, 2, figure=fig, width_ratios=[4, 1])
+
+        axes = [fig.add_subplot(gs[i, 0]) for i in range(4)] 
+        axv1 = fig.add_subplot(gs[1, 1])
+        axv2 = fig.add_subplot(gs[3, 1])
+        ax3b = axes[3].twinx()   ### To plot as purcentage of background intensity 
+        ax1b = axes[1].twinx()   ### To plot as purcentage of background intensity 
+        
+        colors = ["k", "r", "b", "g"]
+        c_dayglow = "orangered"
+        c_nightglow = "forestgreen"
+        dR = 20 ### Rayleighs
+        dR2 = 20e4
+        dv = 1e-4
+        du = 3e-4
+        fmin, fmax = 0.001, 0.04
+        ##############################################################
+
+        ### Loop on distances from epicenter 
+        for i, d in enumerate(dist):
+            
+            # if i==0:
+            axes[0].plot(time, vel[i,:]+dv*i, c="k", lw=1)
+            axes[2].plot(time, dis[i,:]+du*i, c="k", lw=1)
+
+            ### Filter I between fmin and fmax: 
+            # I_nightglow_filt = butter_filter(I_rayleigh_1_27[i, :], 1/dt, fmin,fmax, order=4)
+            I_nightglow_filt = I_rayleigh_1_27[i, :]# butter_filter(I_rayleigh_1_27[i, :], 1/dt, fmin,fmax, order=4)
+            axes[1].plot(time, I_nightglow_filt +dR*i, c=colors[i], lw=1, 
+                         label="{:.0f}km, {:.0f}°".format(d/180*(np.pi*r_venus)/1e3, d))
+            ax1b.plot(time, (I_nightglow_filt +dR*i)/I_background_1_27*100, ls="")
+            ###
+        
+            ### Filter I between fmin and fmax: 
+            # I_dayglow_filt = butter_filter(I_rayleigh_4_28[i, :], 1/dt, fmin,fmax, order=4)
+            I_dayglow_filt = I_rayleigh_4_28[i, :]# butter_filter(I_rayleigh_4_28[i, :], 1/dt, fmin,fmax, order=4)
+            axes[3].plot(time, I_dayglow_filt +dR2*i, c=colors[i], lw=1)
+            ax3b.plot(time, (I_dayglow_filt +dR2*i)/I_background_4_28*100, ls="")
+            ###
+            
+        ###
+        axes[0].set_ylabel(r"Ground Vel. / [$m/s$]")
+        axes[0].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+        axes[2].set_ylabel(r"Ground Disp. / [$m$]")
+        axes[2].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+        ###
+        axes[1].set_ylabel(r"1.27$\mu m$ Intensity / [$R$]")
+        axes[1].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+        ax1b.set_ylabel(r"1.27$\mu m$ Intensity Pert. / [%]")
+        ax1b.ticklabel_format(style='sci', axis='y', scilimits=(-1,1), useMathText=True)
+        ###
+        axes[3].set_ylabel(r"4.28$\mu m$ Intensity / [$R$]")
+        axes[3].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+        ax3b.set_ylabel(r"4.28$\mu m$ Intensity Pert. / [%]")
+        ax3b.ticklabel_format(style='sci', axis='y', scilimits=(-1,1), useMathText=True)
+        ###
+        axes[1].legend(framealpha=0.8, edgecolor="none", loc=1, title="Distance")
+
+        ### Plot VER profiles 
+        axv1.fill_betweenx(alt_atm/1e3, 0, ver_1_27, edgecolor="k", facecolor=c_nightglow, alpha=0.4)
+        axv1.set_ylabel(r"Altitude / [$km$]")
+        axv1.set_xlabel(r"1.27$\mu m$ VER / [$ph/m^3/s$]")
+        ###
+        axv2.fill_betweenx(alt_atm/1e3, 0, ver_4_28, edgecolor="k", facecolor=c_dayglow, alpha=0.4)
+        axv2.set_ylabel(r"Altitude / [$km$]")
+        axv2.set_xlabel(r"4.28$\mu m$ VER / [$ph/m^3/s$]")
+
+        ###
+        axes[-1].set_xlabel("Time / [$s$]")
+        for ax in axes:
+            ax.set_xlim(0,60*60)
+        axv1.set_xlim(0, 6e11)
+        axv2.set_xlim(0, 7e12)
+        for ax in [axv1, axv2]:
+            ax.set_ylim(80,160)
+            ax.yaxis.set_label_position("right")
+            ax.yaxis.tick_right()
+            ax.xaxis.get_offset_text().set_position((1.2, 1.0))  # (x, y) in axis coordinates
+            ax.xaxis.get_offset_text().set_horizontalalignment('left')
+            ax.xaxis.get_offset_text().set_verticalalignment('bottom')
+        for ax in axes[:-1]:
+            ax.set_xticklabels([])
+
+        fig.suptitle("Seismic and Airglow signals for Mw 6.5 earthquake, filtered between [{:.3g}, {:.3g}] Hz".format(fmin, fmax))
+        fig.align_labels()
+        fig.subplots_adjust(hspace=0.4, wspace=0.35, bottom=0.08, top=0.93)
+        ###
+        # fig.savefig(dir_save + "Nightglow_Dayglow_traces_PL2016_dirac.png", dpi=300)
+
+    
+    def make_figure_sinusoid():
+        fig = plt.figure(figsize=(10, 8))
+        gs = gridspec.GridSpec(4, 2, figure=fig, width_ratios=[4, 1])
+
+        axes = [fig.add_subplot(gs[i, 0]) for i in range(4)] 
+        axv1 = fig.add_subplot(gs[1, 1])
+        axv2 = fig.add_subplot(gs[3, 1])
+        ax3b = axes[3].twinx()   ### To plot as purcentage of background intensity 
+        ax1b = axes[1].twinx()   ### To plot as purcentage of background intensity 
+        
+        colors = ["k", "r", "b", "g"]
+        c_dayglow = "orangered"
+        c_nightglow = "forestgreen"
+        dR = 0#20 ### Rayleighs
+        dR2 = 0#20e4
+        dv = 0#1e-4
+        du = 0#3e-4
+        fmin, fmax = 0.001, 0.04
+        ##############################################################
+
+        ### Loop on distances from epicenter 
+        for i, f in enumerate(freq):
+            
+            # if i==0:
+            axes[0].plot(time, vel[i,:]+dv*i, c=colors[i], lw=1)
+            axes[2].plot(time, dis[i,:]+du*i, c=colors[i], lw=1)
+
+            ### Filter I between fmin and fmax: 
+            # I_nightglow_filt = butter_filter(I_rayleigh_1_27[i, :], 1/dt, fmin,fmax, order=4)
+            I_nightglow_filt = I_rayleigh_1_27[i, :]# butter_filter(I_rayleigh_1_27[i, :], 1/dt, fmin,fmax, order=4)
+            axes[1].plot(time, I_nightglow_filt +dR*i, c=colors[i], lw=1, 
+                         label="f={:.3g} Hz, T={:.3g} s".format(f, 1/f))
+            ax1b.plot(time, (I_nightglow_filt +dR*i)/I_background_1_27*100, ls="")
+            ###
+        
+            ### Filter I between fmin and fmax: 
+            # I_dayglow_filt = butter_filter(I_rayleigh_4_28[i, :], 1/dt, fmin,fmax, order=4)
+            I_dayglow_filt = I_rayleigh_4_28[i, :]# butter_filter(I_rayleigh_4_28[i, :], 1/dt, fmin,fmax, order=4)
+            axes[3].plot(time, I_dayglow_filt +dR2*i, c=colors[i], lw=1)
+            ax3b.plot(time, (I_dayglow_filt +dR2*i)/I_background_4_28*100, ls="")
+            ###
+            
+        ###
+        axes[0].set_ylabel(r"Ground Vel. / [$m/s$]")
+        axes[0].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+        axes[2].set_ylabel(r"Ground Disp. / [$m$]")
+        axes[2].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+        ###
+        axes[1].set_ylabel(r"1.27$\mu m$ Intensity / [$R$]")
+        axes[1].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+        ax1b.set_ylabel(r"1.27$\mu m$ Intensity Pert. / [%]")
+        ax1b.ticklabel_format(style='sci', axis='y', scilimits=(-1,1), useMathText=True)
+        ###
+        axes[3].set_ylabel(r"4.28$\mu m$ Intensity / [$R$]")
+        axes[3].ticklabel_format(style='sci', axis='y', scilimits=(0,0), useMathText=True)
+        ax3b.set_ylabel(r"4.28$\mu m$ Intensity Pert. / [%]")
+        ax3b.ticklabel_format(style='sci', axis='y', scilimits=(-1,1), useMathText=True)
+        ###
+        axes[1].legend(framealpha=0.8, edgecolor="none", loc=1, title="Distance")
+
+        ### Plot VER profiles 
+        axv1.fill_betweenx(alt_atm/1e3, 0, ver_1_27, edgecolor="k", facecolor=c_nightglow, alpha=0.4)
+        axv1.set_ylabel(r"Altitude / [$km$]")
+        axv1.set_xlabel(r"1.27$\mu m$ VER / [$ph/m^3/s$]")
+        ###
+        axv2.fill_betweenx(alt_atm/1e3, 0, ver_4_28, edgecolor="k", facecolor=c_dayglow, alpha=0.4)
+        axv2.set_ylabel(r"Altitude / [$km$]")
+        axv2.set_xlabel(r"4.28$\mu m$ VER / [$ph/m^3/s$]")
+
+        ###
+        axes[-1].set_xlabel("Time / [$s$]")
+        for ax in axes:
+            ax.set_xlim(-100, time.max())
+        axv1.set_xlim(0, 6e11)
+        axv2.set_xlim(0, 7e12)
+        for ax in [axv1, axv2]:
+            ax.set_ylim(80,160)
+            ax.yaxis.set_label_position("right")
+            ax.yaxis.tick_right()
+            ax.xaxis.get_offset_text().set_position((1.2, 1.0))  # (x, y) in axis coordinates
+            ax.xaxis.get_offset_text().set_horizontalalignment('left')
+            ax.xaxis.get_offset_text().set_verticalalignment('bottom')
+        for ax in axes[:-1]:
+            ax.set_xticklabels([])
+
+        fig.suptitle("Seismic and Airglow signals for sinusoid perturbation")
+        fig.align_labels()
+        fig.subplots_adjust(hspace=0.4, wspace=0.35, bottom=0.08, top=0.93)
+        ###
+        # fig.savefig(dir_save + "Nightglow_Dayglow_traces_PL2016_dirac.png", dpi=300)
+
+    
+    if test_waveform:
+        make_figure_waveform()
+    elif test_sinusoid:
+        make_figure_sinusoid()
 
 
 # =========================================================================================================
@@ -4992,16 +6386,7 @@ def plot_airglow_traces(amp_dayglow, amp_nightglow, GF_f0, GF_f0_u, amp_at_90, f
     fig.subplots_adjust(wspace=0.55)
 
 
-# =========================================================================================================
-if __name__ == '__main__':
-# =========================================================================================================
-
-    check_simple_perturbation_nightglow()
-    # check_simple_perturbation_dayglow()
-    # check_Lognonne_2016()
-    plt.show()
-    quit()
-
+def build_airglow_wavefield():
     ## Load atmosphere
     f_rho, f_t, f_gamma, f_c, f_VER, f_VER_dayglow = load_atmosphere(folder_data=fold+'data/')
 
@@ -5044,3 +6429,33 @@ if __name__ == '__main__':
     np.save(f'{folder_wavefield}amps_dayglow_mw{mw:.1f}_d{depth/1e3:.0f}_st{strike:.0f}_di{dip:.0f}_ra{rake:.0f}_updated.npy', amps_dayglow)
     np.save(f'{folder_wavefield}amps_nightglow_mw{mw:.1f}_d{depth/1e3:.0f}_st{strike:.0f}_di{dip:.0f}_ra{rake:.0f}_updated.npy', amps_nightglow)
     bp()
+
+
+# =========================================================================================================
+if __name__ == '__main__':
+# =========================================================================================================
+
+    ### TEST SCALER FUNCTIONS 
+    # compute_airglow_scaler_new()
+    # compute_airglow_scaler_sine()
+    # compute_airglow_scaler_new(mw = 1, strike=45, dip=45, rake=45, do_plot=True, effect="ampl",
+    #                           store_ids_dists = [('GF_venus_Cold100_atten_qssp_nearfield',0e3,50e3),('GF_venus_Cold100_atten_qssp',50e3,8000e3)])  
+                                ### Check effect of amplification curves 
+    # compute_airglow_scaler_Hots(mw=None, strike=45, dip=45, rake=45, do_plot=True, effect=None, tit ="", 
+    #                         store_ids_dists = [('GF_venus_Hot10_atten_qssp_nearfield',0e3,50e3),('GF_venus_Hot10_atten_qssp',50e3,8000e3)])
+                                ## Plot all the Hots together
+
+    ### TEST SINUSOID PERTURBATIONS 
+    # check_simple_perturbation_nightglow(test="sutin")
+    # check_simple_perturbation_nightglow(test="kenda")
+    # check_simple_perturbation_dayglow()
+
+    ### OTHER TESTS 
+    # check_Lognonne_2016()
+    # minimal_example(test_waveform=True)
+    minimal_example(test_sinusoid=True)
+
+    plt.show()
+
+
+    
